@@ -1,40 +1,43 @@
 # pt2-web
 
-Hybridport av `p2-clone` där appen byggs som ett modernt Vite/TypeScript-skal runt en framtida wasm-kärna.
+`pt2-web` is a web/wasm porting workspace around a vendored `p2-clone` core. The active application is built as a Vite + TypeScript shell around a wasm-backed tracker engine.
 
-## Arkitektur
+## Architecture
 
-- `src/core/trackerEngine.ts` definierar det stabila engine-kontraktet.
-- `src/core/wasmEngine.ts` är wasm-backenden som förväntar sig ett explicit adapter-API från C-kärnan.
-- `src/core/mockEngine.ts` är fallback-backenden för UI- och kontraktsutveckling när wasm-adaptern ännu inte finns eller `emcc` saknas.
-- `src/app.ts` innehåller den moderna keyboard-first UI:n för pattern editing, song settings och samplebank.
+- `src/core/trackerEngine.ts` defines the stable engine contract used by the UI.
+- `src/core/wasmEngine.ts` provides the wasm-backed implementation and integrates with the C adapter layer.
+- `src/core/mockEngine.ts` provides the fallback engine when the wasm build is unavailable.
+- `src/bootstrap.ts` is the active browser entry point.
+- `src/appMain.ts` contains the active modern UI shell that also hosts the classic canvas.
 
-## Läget just nu
+## Current state
 
-- TypeScript-appen använder nu ett strikt adapterlager i stället för att prata direkt med den gamla SDL-UI:n.
-- UI:t kan köras och byggas utan wasm tack vare mock-backend.
-- Wasm-backenden är definierad men väntar fortfarande på att C-kärnan exporterar det nya engine-adapter-API:t.
-- Playback/parity är därför ännu inte flyttad till den nya hybrida UI:n.
+- The TypeScript application talks to the tracker through a dedicated adapter layer instead of talking directly to the legacy SDL UI.
+- The UI can be developed and built without wasm thanks to the mock engine fallback.
+- The vendored C tree contains web-specific adapter changes that are required by the current wasm build.
+- Public release readiness is still blocked by unresolved license provenance for the PowerPacker unpacker path.
 
-## Kommandon
+## Commands
 
 - `npm run dev`
-  - startar UI:t i utvecklingsläge
+  - Start the web UI in development mode.
 - `npm run typecheck`
-  - kör TypeScript-kontroll
+  - Run TypeScript type checking.
 - `npm run build:web`
-  - bygger bara webbskalet
+  - Build the web shell only.
 - `npm run build:wasm`
-  - bygger wasm-kärnan via Emscripten
+  - Build the wasm core through Emscripten.
 - `npm run build`
-  - bygger först wasm och sedan webbskalet
+  - Build the wasm core and then the web shell.
 
-## Förbereda upstream-kod
+## Prepare upstream source
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\sync-upstream.ps1
 ```
 
-## Viktigt
+## Notes
 
-Målet är feature parity med desktop-versionen, men den nya hybrida engine-adaptern är ännu inte komplett på C-sidan. Tills dess kör appen på mock-backend och ska betraktas som arkitektur- och UI-implementation, inte som färdig playback-port.
+- `vendor/p2-clone` is the vendored build input for the public repository.
+- Keep all maintained text and comments in English.
+- The current goal is feature parity with the desktop tracker while preserving the current web UI exactly during refactors.

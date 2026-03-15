@@ -101,7 +101,7 @@ export class WasmTrackerEngine implements TrackerEngine {
 
     const bootResult = this.callNumber('pt2_web_engine_boot', [], []);
     if (bootResult !== 1) {
-      throw new Error('WASM-kärnan saknar det planerade engine-adapter-API:t.');
+      throw new Error('The wasm core is missing the planned engine adapter API.');
     }
 
     this.snapshot = this.getSnapshot();
@@ -524,7 +524,7 @@ export class WasmTrackerEngine implements TrackerEngine {
 
   private requireModule(): Pt2Module {
     if (!this.module) {
-      throw new Error('WASM-engine har inte initierats.');
+      throw new Error('The wasm engine has not been initialized.');
     }
 
     return this.module;
@@ -532,7 +532,7 @@ export class WasmTrackerEngine implements TrackerEngine {
 
   private requireConfig(): EngineConfig {
     if (!this.config) {
-      throw new Error('WASM-engine saknar konfiguration.');
+      throw new Error('The wasm engine is missing its configuration.');
     }
 
     return this.config;
@@ -547,3 +547,4 @@ export class WasmTrackerEngine implements TrackerEngine {
     };
   }
 }
+

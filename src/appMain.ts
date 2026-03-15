@@ -6,7 +6,6 @@ import type { TrackerEngine } from './core/trackerEngine';
 import type {
   CursorField,
   EngineConfig,
-  ExportedFile,
   PatternCell,
   QuadrascopeState,
   SampleSlot,
@@ -20,14 +19,34 @@ import {
   formatCellSample,
   formatSampleLength,
 } from './ui/formatters';
+import {
+  buildPianoKeys,
+  brighten,
+  CHANNEL_COLORS,
+  clamp,
+  CURSOR_FIELDS,
+  darken,
+  formatSongTime,
+  getVisualizationLabel,
+  hexToRgb,
+  MAX_OCTAVE,
+  MIN_OCTAVE,
+  mixRgb,
+  moveCursorHorizontally,
+  noteToAbsolute,
+  PIANO_END_ABSOLUTE,
+  PIANO_START_ABSOLUTE,
+  rgba,
+  SAMPLE_PAGE_SIZE,
+  spectrumColorAt,
+  triggerDownload,
+  VISUALIZATION_MODES,
+  type VisualizationMode,
+} from './ui/appShared';
 
 const DEFAULT_STATUS = 'Initializing ProTracker 2 web clone...';
 const SHOW_CLASSIC_DEBUG = false;
 const MODERN_VISIBLE_PATTERN_ROWS = 15;
-const MIN_OCTAVE = 1;
-const MAX_OCTAVE = 2;
-const SAMPLE_PAGE_SIZE = 12;
-const CURSOR_FIELDS: CursorField[] = ['note', 'sampleHigh', 'sampleLow', 'effect', 'paramHigh', 'paramLow'];
 const PATTERN_ROW_HEIGHT = 30;
 const PATTERN_GUTTER = 10;
 const PATTERN_ROW_INDEX_WIDTH = 54;
@@ -37,55 +56,6 @@ const SPECTRUM_HEIGHT = 220;
 const PIANO_HEIGHT = QUADRASCOPE_HEIGHT;
 const SAMPLE_PREVIEW_HEIGHT = 182;
 const SAMPLE_EDITOR_HEIGHT = 280;
-const CHANNEL_COLORS = ['#deff5a', '#43f7af', '#5ab8ff', '#ffad46'];
-const NOTE_NAMES = ['C-', 'C#', 'D-', 'D#', 'E-', 'F-', 'F#', 'G-', 'G#', 'A-', 'A#', 'B-'];
-const VISUALIZATION_MODES = ['quad-stack', 'quad-classic', 'spectrum', 'split', 'signal-trails', 'piano'] as const;
-type VisualizationMode = (typeof VISUALIZATION_MODES)[number];
-const PIANO_START_ABSOLUTE = 12;
-const PIANO_END_ABSOLUTE = 47;
-
-const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
-
-const hexToRgb = (hex: string): { r: number; g: number; b: number } => {
-  const value = hex.replace('#', '');
-  const normalized = value.length === 3
-    ? value.split('').map((char) => `${char}${char}`).join('')
-    : value;
-
-  return {
-    r: Number.parseInt(normalized.slice(0, 2), 16),
-    g: Number.parseInt(normalized.slice(2, 4), 16),
-    b: Number.parseInt(normalized.slice(4, 6), 16),
-  };
-};
-
-const mixRgb = (
-  left: { r: number; g: number; b: number },
-  right: { r: number; g: number; b: number },
-  amount: number,
-): { r: number; g: number; b: number } => ({
-  r: Math.round(left.r + ((right.r - left.r) * amount)),
-  g: Math.round(left.g + ((right.g - left.g) * amount)),
-  b: Math.round(left.b + ((right.b - left.b) * amount)),
-});
-
-const rgba = (color: { r: number; g: number; b: number }, alpha = 1): string =>
-  `rgba(${color.r}, ${color.g}, ${color.b}, ${alpha})`;
-
-const brighten = (color: { r: number; g: number; b: number }, amount: number): { r: number; g: number; b: number } =>
-  mixRgb(color, { r: 255, g: 255, b: 255 }, amount);
-
-const darken = (color: { r: number; g: number; b: number }, amount: number): { r: number; g: number; b: number } =>
-  mixRgb(color, { r: 8, g: 13, b: 10 }, amount);
-
-const spectrumColorAt = (t: number): { r: number; g: number; b: number } => {
-  const clamped = clamp(t, 0, 1);
-  const scaled = clamped * (CHANNEL_COLORS.length - 1);
-  const leftIndex = Math.floor(scaled);
-  const rightIndex = Math.min(CHANNEL_COLORS.length - 1, leftIndex + 1);
-  const localT = scaled - leftIndex;
-  return mixRgb(hexToRgb(CHANNEL_COLORS[leftIndex]), hexToRgb(CHANNEL_COLORS[rightIndex]), localT);
-};
 
 const iconMarkup = (iconNode: unknown): string =>
   createElement(iconNode as Parameters<typeof createElement>[0], {
@@ -95,140 +65,6 @@ const iconMarkup = (iconNode: unknown): string =>
     'stroke-width': 1.8,
     'aria-hidden': 'true',
   }).outerHTML;
-
-const triggerDownload = (file: ExportedFile): void => {
-  const blob = new Blob([Uint8Array.from(file.bytes)], { type: file.mimeType });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = file.filename;
-  link.click();
-  URL.revokeObjectURL(url);
-};
-
-const moveCursorHorizontally = (
-  cursor: TrackerSnapshot['cursor'],
-  channelCount: number,
-  direction: -1 | 1,
-): { channel: number; field: CursorField } => {
-  const maxChannel = Math.max(0, channelCount - 1);
-  let fieldIndex = CURSOR_FIELDS.indexOf(cursor.field);
-  let channel = cursor.channel;
-
-  fieldIndex += direction;
-
-  if (fieldIndex < 0) {
-    if (channel > 0) {
-      channel -= 1;
-      fieldIndex = CURSOR_FIELDS.length - 1;
-    } else {
-      fieldIndex = 0;
-    }
-  } else if (fieldIndex >= CURSOR_FIELDS.length) {
-    if (channel < maxChannel) {
-      channel += 1;
-      fieldIndex = 0;
-    } else {
-      fieldIndex = CURSOR_FIELDS.length - 1;
-    }
-  }
-
-  return {
-    channel,
-    field: CURSOR_FIELDS[fieldIndex],
-  };
-};
-
-const getVisualizationLabel = (mode: VisualizationMode): string => {
-  switch (mode) {
-    case 'quad-stack':
-      return 'Quadrascope';
-    case 'quad-classic':
-      return 'Classic quadrascope';
-    case 'spectrum':
-      return 'Spectrum analyzer';
-    case 'split':
-      return 'Scope + spectrum';
-    case 'signal-trails':
-      return 'Signal trails';
-    case 'piano':
-      return 'Tracker piano';
-  }
-};
-
-const formatSongTime = (snapshot: TrackerSnapshot): string => {
-  const secondsPerRow = (snapshot.transport.speed * 2.5) / Math.max(1, snapshot.transport.bpm);
-  const totalRows = (snapshot.transport.position * 64) + snapshot.transport.row;
-  const totalSeconds = Math.max(0, Math.floor(totalRows * secondsPerRow));
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-};
-
-interface PianoKey {
-  note: string;
-  absolute: number;
-  black: boolean;
-  x: number;
-  width: number;
-}
-
-const noteToAbsolute = (note: string | null | undefined): number | null => {
-  if (!note || note === '---' || note.length < 3) {
-    return null;
-  }
-
-  const pitch = note.slice(0, 2);
-  const octave = Number.parseInt(note.slice(2), 10);
-  const pitchIndex = NOTE_NAMES.indexOf(pitch);
-  if (pitchIndex < 0 || Number.isNaN(octave)) {
-    return null;
-  }
-
-  return (octave * 12) + pitchIndex;
-};
-
-const absoluteToNote = (absolute: number): string => {
-  const clamped = clamp(absolute, PIANO_START_ABSOLUTE, PIANO_END_ABSOLUTE);
-  return `${NOTE_NAMES[clamped % 12]}${Math.floor(clamped / 12)}`;
-};
-
-const isBlackSemitone = (absolute: number): boolean => [1, 3, 6, 8, 10].includes(absolute % 12);
-
-const buildPianoKeys = (width: number, startAbsolute = PIANO_START_ABSOLUTE, endAbsolute = PIANO_END_ABSOLUTE): PianoKey[] => {
-  const whiteKeys = Array.from({ length: endAbsolute - startAbsolute + 1 }, (_, offset) => startAbsolute + offset)
-    .filter((absolute) => !isBlackSemitone(absolute));
-  const whiteKeyWidth = width / Math.max(1, whiteKeys.length);
-  const whiteKeyMap = new Map<number, number>();
-
-  whiteKeys.forEach((absolute, index) => {
-    whiteKeyMap.set(absolute, index);
-  });
-
-  return Array.from({ length: endAbsolute - startAbsolute + 1 }, (_, offset) => {
-    const absolute = startAbsolute + offset;
-    const black = isBlackSemitone(absolute);
-    if (!black) {
-      const whiteIndex = whiteKeyMap.get(absolute) ?? 0;
-      return {
-        note: absoluteToNote(absolute),
-        absolute,
-        black,
-        x: whiteIndex * whiteKeyWidth,
-        width: whiteKeyWidth,
-      };
-    }
-
-    const leftWhite = whiteKeyMap.get(absolute - 1) ?? 0;
-    return {
-      note: absoluteToNote(absolute),
-      absolute,
-      black,
-      x: ((leftWhite + 1) * whiteKeyWidth) - (whiteKeyWidth * 0.32),
-      width: whiteKeyWidth * 0.64,
-    };
-  });
-};
 
 export class TrackerApplication {
   private readonly root: HTMLElement;
@@ -2217,8 +2053,11 @@ export class TrackerApplication {
         this.moduleInput.click();
         return;
       case 'save-module':
-        triggerDownload(await this.engine.saveModule());
+      {
+        const file = await this.engine.saveModule();
+        triggerDownload(file.filename, file.mimeType, file.bytes);
         return;
+      }
       case 'toggle-play':
         this.engine.setTransport({ type: 'transport/toggle' });
         return;

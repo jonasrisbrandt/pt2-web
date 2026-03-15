@@ -129,8 +129,8 @@ const createSnapshot = (status: string): TrackerSnapshot => ({
   ready: false,
   status,
   diagnostics: [
-    'WASM-kärnan är inte aktiv. Mock-backend används för UI- och API-utveckling.',
-    'Playback här är bara UI-simulering och ersätter inte Paula/replayer-verifiering.',
+    'The wasm core is not active. The mock engine is being used for UI and API development.',
+    'Playback here is UI-only simulation and does not replace Paula/replayer verification.',
   ],
   capabilities: {
     accuratePlayback: false,
@@ -790,3 +790,4 @@ export class MockTrackerEngine implements TrackerEngine {
     }, 500);
   }
 }
+

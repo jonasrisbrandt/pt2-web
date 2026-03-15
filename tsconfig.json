@@ -10,6 +10,7 @@
     "esModuleInterop": true,
     "noEmit": true,
     "strict": true,
+    "types": [],
     "lib": [
       "DOM",
       "DOM.Iterable",
@@ -18,8 +19,5 @@
   },
   "include": [
     "src"
-  ],
-  "exclude": [
-    "src/app.ts"
   ]
 }

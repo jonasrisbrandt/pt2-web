@@ -1,4 +1,4 @@
-import type { PatternCell, SampleSlot, TrackerSnapshot } from '../core/trackerTypes';
+import type { PatternCell, SampleSlot } from '../core/trackerTypes';
 
 export const escapeHtml = (value: string): string =>
   value
@@ -29,6 +29,3 @@ export const formatCellParam = (cell: PatternCell): string =>
 
 export const formatSampleLength = (sample: SampleSlot): string =>
   sample.length === 0 ? 'Empty sample' : `${sample.length.toLocaleString('en-US')} bytes`;
-
-export const backendLabel = (snapshot: TrackerSnapshot): string =>
-  snapshot.backend === 'wasm' ? 'WASM core' : 'Mock engine';

@@ -19,7 +19,7 @@ export const createTrackerEngine = async (
 
     return {
       engine: fallback,
-      warning: error instanceof Error ? error.message : 'Okänt fel vid initiering av wasm-engine.',
+      warning: error instanceof Error ? error.message : 'Unknown error while initializing the wasm engine.',
     };
   }
 };

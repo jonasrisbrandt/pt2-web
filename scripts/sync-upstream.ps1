@@ -1,5 +1,5 @@
 param(
-  [string]$SourceRoot = 'C:\SourceCode\Amiga\projects\external_repos\p2-clone'
+  [string]$SourceRoot
 )
 
 $ErrorActionPreference = 'Stop'
@@ -7,8 +7,14 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $vendorRoot = Join-Path $projectRoot 'vendor\p2-clone'
 
+if ([string]::IsNullOrWhiteSpace($SourceRoot)) {
+  $SourceRoot = Join-Path $projectRoot '..\external_repos\p2-clone'
+}
+
+$SourceRoot = [System.IO.Path]::GetFullPath($SourceRoot)
+
 if (-not (Test-Path $SourceRoot)) {
-  throw "Upstream-katalogen hittades inte: $SourceRoot"
+  throw "Upstream source directory was not found: $SourceRoot"
 }
 
 New-Item -ItemType Directory -Force $vendorRoot | Out-Null

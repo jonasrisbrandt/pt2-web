@@ -39,7 +39,7 @@ void application.init().catch((error: unknown) => {
     <section class="fatal-screen">
       <p class="eyebrow">ProTracker 2 web clone</p>
       <h1>Startup failed</h1>
-      <p>Se konsolen för detaljer. Appen kunde inte skapa sin engine eller sitt UI-skal.</p>
+      <p>See the browser console for details. The app could not create its engine or UI shell.</p>
     </section>
   `;
 });
