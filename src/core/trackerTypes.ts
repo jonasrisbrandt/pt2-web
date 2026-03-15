@@ -102,6 +102,9 @@ export interface TrackerSnapshot {
     };
   };
   capabilities: EngineCapabilities;
+  audio: {
+    stereo: boolean;
+  };
   song: {
     title: string;
     currentPattern: number;
@@ -114,6 +117,7 @@ export interface TrackerSnapshot {
     mode: TransportMode;
     bpm: number;
     speed: number;
+    elapsedSeconds: number;
     row: number;
     pattern: number;
     position: number;
@@ -168,6 +172,7 @@ export type TrackerCommand =
   | { type: 'sample-editor/crop' }
   | { type: 'sample-editor/cut' }
   | { type: 'sample-editor/play'; mode: 'sample' | 'view' | 'selection' }
+  | { type: 'audio/toggle-stereo' }
   | { type: 'note-preview/play'; note: string; channel: number }
   | { type: 'note-preview/stop' };
 

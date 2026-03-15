@@ -17,7 +17,7 @@ import type {
 const DEFAULT_PATTERN_ROWS = 64;
 const DEFAULT_CHANNELS = 4;
 const DEFAULT_SAMPLES = 31;
-const SAMPLE_PREVIEW_POINTS = 48;
+const SAMPLE_PREVIEW_POINTS = 256;
 const CURSOR_FIELDS: CursorField[] = ['note', 'sampleHigh', 'sampleLow', 'effect', 'paramHigh', 'paramLow'];
 
 const clone = <T>(value: T): T => structuredClone(value);
@@ -153,6 +153,9 @@ const createSnapshot = (status: string): TrackerSnapshot => ({
     keyboardFirst: true,
     browserPersistence: false,
   },
+  audio: {
+    stereo: true,
+  },
   song: {
     title: 'UNTITLED',
     currentPattern: 0,
@@ -165,6 +168,7 @@ const createSnapshot = (status: string): TrackerSnapshot => ({
     mode: 'song',
     bpm: 125,
     speed: 6,
+    elapsedSeconds: 0,
     row: 0,
     pattern: 0,
     position: 0,
@@ -212,6 +216,8 @@ export class MockTrackerEngine implements TrackerEngine {
   private playbackTimer: number | null = null;
   private previewTimer: number | null = null;
   private sampleData = createSampleData(this.snapshot.samples);
+  private playbackStartedAt: number | null = null;
+  private playbackAccumulatedMs = 0;
 
   async init(_config: EngineConfig): Promise<void> {
     this.snapshot.ready = true;
@@ -221,12 +227,17 @@ export class MockTrackerEngine implements TrackerEngine {
   }
 
   async dispose(): Promise<void> {
+    this.capturePlaybackElapsed();
     this.stopPlaybackTimer();
     this.stopPreviewTimer();
     this.listeners.clear();
   }
 
   async loadModule(file: Uint8Array, name: string): Promise<void> {
+    this.capturePlaybackElapsed();
+    this.stopPlaybackTimer();
+    this.playbackAccumulatedMs = 0;
+    this.snapshot.transport.elapsedSeconds = 0;
     this.snapshot.recentModuleName = name;
     this.snapshot.song.title = name.replace(/\.[^.]+$/, '').slice(0, 20).toUpperCase() || 'UNTITLED';
     this.snapshot.status = `Loaded ${name} (${file.byteLength} bytes) into the mock engine.`;
@@ -434,6 +445,9 @@ export class MockTrackerEngine implements TrackerEngine {
       case 'sample-editor/play':
         this.playSamplePreview(command.mode);
         break;
+      case 'audio/toggle-stereo':
+        this.snapshot.audio.stereo = !this.snapshot.audio.stereo;
+        break;
       case 'note-preview/play':
         break;
       case 'note-preview/stop':
@@ -456,11 +470,15 @@ export class MockTrackerEngine implements TrackerEngine {
         this.restartPlaybackTimer();
         break;
       case 'transport/pause':
+        this.capturePlaybackElapsed();
         this.snapshot.transport.playing = false;
         this.stopPlaybackTimer();
         break;
       case 'transport/stop':
+        this.capturePlaybackElapsed();
         this.snapshot.transport.playing = false;
+        this.playbackAccumulatedMs = 0;
+        this.snapshot.transport.elapsedSeconds = 0;
         this.snapshot.transport.position = 0;
         this.snapshot.song.currentPosition = 0;
         this.snapshot.transport.row = 0;
@@ -542,12 +560,18 @@ export class MockTrackerEngine implements TrackerEngine {
   private restartPlaybackTimer(): void {
     this.stopPlaybackTimer();
     const intervalMs = Math.max(40, Math.round((2500 * this.snapshot.transport.speed) / this.snapshot.transport.bpm));
+    this.playbackStartedAt = performance.now();
 
     this.playbackTimer = window.setInterval(() => {
       this.snapshot.transport.row = (this.snapshot.transport.row + 1) % DEFAULT_PATTERN_ROWS;
       if (this.snapshot.transport.row === 0) {
         this.snapshot.transport.position = (this.snapshot.transport.position + 1) % Math.max(1, this.snapshot.song.length);
       }
+      this.snapshot.transport.elapsedSeconds = this.snapshot.transport.mode === 'song'
+        ? Math.floor(
+          (this.playbackAccumulatedMs + Math.max(0, performance.now() - (this.playbackStartedAt ?? performance.now()))) / 1000,
+        )
+        : this.snapshot.transport.elapsedSeconds;
       this.snapshot.quadrascope?.channels.forEach((channel, index) => {
         channel.active = this.snapshot.transport.playing;
         channel.volume = 24 + ((index * 9 + this.snapshot.transport.row) % 36);
@@ -564,6 +588,18 @@ export class MockTrackerEngine implements TrackerEngine {
       window.clearInterval(this.playbackTimer);
       this.playbackTimer = null;
     }
+
+    this.playbackStartedAt = null;
+  }
+
+  private capturePlaybackElapsed(): void {
+    if (this.playbackStartedAt === null) {
+      return;
+    }
+
+    this.playbackAccumulatedMs += Math.max(0, performance.now() - this.playbackStartedAt);
+    this.snapshot.transport.elapsedSeconds = Math.floor(this.playbackAccumulatedMs / 1000);
+    this.playbackStartedAt = null;
   }
 
   private stopPreviewTimer(): void {

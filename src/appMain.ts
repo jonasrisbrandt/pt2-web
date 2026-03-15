@@ -9,6 +9,7 @@ import type {
   PatternCell,
   QuadrascopeState,
   SampleSlot,
+  TransportMode,
   TrackerSnapshot,
 } from './core/trackerTypes';
 import {
@@ -174,6 +175,7 @@ export class TrackerApplication {
   private keyboardOctave = 2;
   private viewMode: 'modern' | 'classic' = 'modern';
   private visualizationMode: VisualizationMode = 'quad-stack';
+  private preferredTransportMode: TransportMode = 'song';
   private samplePage = 0;
   private lastSelectedSample = 0;
   private pendingSampleImportSlot: number | null = null;
@@ -215,6 +217,7 @@ export class TrackerApplication {
   private pianoLastFrameAt: number | null = null;
   private modernNotePreviewActive = false;
   private readonly modernPressedNoteKeys = new Set<string>();
+  private readonly modernRecentNoteKeyTimes = new Map<string, number>();
   private classicPressedKeys = new Map<string, ClassicKeyTranslation>();
   private classicDomDebug = {
     x: 0,
@@ -263,11 +266,13 @@ export class TrackerApplication {
       onRootInput: (event) => this.handleInput(event),
       onRootMouseOver: (event) => this.handleRootMouseOver(event),
       onWindowKeyDown: (event) => this.handleKeyDown(event),
+      onWindowKeyPress: (event) => this.handleKeyPress(event),
       onWindowKeyUp: (event) => this.handleKeyUp(event),
       onWindowPointerDown: (event) => this.handleWindowPointerDown(event),
       onWindowBlur: () => {
         this.releaseClassicKeys();
         this.modernPressedNoteKeys.clear();
+        this.modernRecentNoteKeyTimes.clear();
         this.stopModernNotePreview();
       },
       onClassicCanvasPointerMove: (event) => this.handleClassicCanvasPointerMove(event),
@@ -341,6 +346,7 @@ export class TrackerApplication {
 
     this.snapshot = this.engine.getSnapshot();
     this.quadrascope = this.snapshot.quadrascope ?? null;
+    this.preferredTransportMode = this.snapshot.transport.mode;
     if (this.snapshot.editor.editMode !== !this.snapshot.transport.playing) {
       this.engine.dispatch({ type: 'editor/set-edit-mode', enabled: !this.snapshot.transport.playing });
       this.snapshot = this.engine.getSnapshot();
@@ -378,10 +384,35 @@ export class TrackerApplication {
       this.renderToolbarButton('view-modern', Monitor, 'Modern', this.viewMode === 'modern'),
       this.renderToolbarButton('view-classic', View, 'Classic', this.viewMode === 'classic'),
     ].join('');
+    const playbackMode = snapshot.transport.playing ? snapshot.transport.mode : this.preferredTransportMode;
     const transportControlsHtml = [
-      this.renderToolIconButton('transport-play-song', Play, 'Play', snapshot.transport.playing, false, 'module-transport-play'),
-      this.renderToolIconButton('transport-pause', Pause, 'Pause', false, !snapshot.transport.playing, 'module-transport-pause'),
+      this.renderToolIconButton(
+        'transport-toggle-mode',
+        ArrowLeftRight,
+        playbackMode === 'pattern' ? 'Pattern playback' : 'Module playback',
+        playbackMode === 'pattern',
+        false,
+        'module-transport-mode',
+        playbackMode === 'pattern' ? 'P' : 'M',
+      ),
+      this.renderToolIconButton(
+        'transport-toggle',
+        snapshot.transport.playing ? Pause : Play,
+        snapshot.transport.playing ? 'Pause playback' : (playbackMode === 'pattern' ? 'Play pattern' : 'Play module'),
+        snapshot.transport.playing,
+        false,
+        'module-transport-toggle',
+      ),
       this.renderToolIconButton('transport-stop', Square, 'Stop', false, false, 'module-transport-stop'),
+      this.renderToolIconButton(
+        'audio-toggle-stereo',
+        Volume2,
+        snapshot.audio.stereo ? 'Stereo playback' : 'Mono playback',
+        !snapshot.audio.stereo,
+        false,
+        'module-audio-mode',
+        snapshot.audio.stereo ? 'S' : 'M',
+      ),
     ].join('');
     const trackHeadersHtml = [
       this.renderTrackHeader(0, snapshot),
@@ -480,8 +511,16 @@ export class TrackerApplication {
     return renderModernToolbarButton(action, iconMarkup(iconNode), label, active);
   }
 
-  private renderToolIconButton(action: string, iconNode: unknown, label: string, active = false, disabled = false, role = ''): string {
-    return renderModernToolIconButton(action, iconMarkup(iconNode), label, active, disabled, role);
+  private renderToolIconButton(
+    action: string,
+    iconNode: unknown,
+    label: string,
+    active = false,
+    disabled = false,
+    role = '',
+    valueText = '',
+  ): string {
+    return renderModernToolIconButton(action, iconMarkup(iconNode), label, active, disabled, role, valueText);
   }
 
   private canEditSnapshot(snapshot: TrackerSnapshot | null): boolean {
@@ -1382,8 +1421,9 @@ export class TrackerApplication {
       snapshot: this.snapshot,
       moduleInput: this.moduleInput,
       sampleInput: this.sampleInput,
-      keyboardOctave: this.keyboardOctave,
-      sampleEditorViewOverride: this.sampleEditorViewOverride,
+        keyboardOctave: this.keyboardOctave,
+        preferredTransportMode: this.preferredTransportMode,
+        sampleEditorViewOverride: this.sampleEditorViewOverride,
       canEditSnapshot: (snapshot) => this.canEditSnapshot(snapshot),
       clearSampleEditorViewOverride: () => this.clearSampleEditorViewOverride(),
       getSampleEditorView: (snapshot) => this.getSampleEditorView(snapshot),
@@ -1396,9 +1436,10 @@ export class TrackerApplication {
       startSamplePreviewSession: (nextSnapshot, mode) => this.startSamplePreviewSession(nextSnapshot, mode),
       stopSamplePreviewSession: () => this.stopSamplePreviewSession(false),
       setKeyboardOctave: (value) => { this.keyboardOctave = value; },
-      setLastSelectedSample: (value) => { this.lastSelectedSample = value; },
-      setPendingSampleImportSlot: (value) => { this.pendingSampleImportSlot = value; },
-      setSampleEditorViewOverride: (value) => { this.sampleEditorViewOverride = value; },
+        setLastSelectedSample: (value) => { this.lastSelectedSample = value; },
+        setPendingSampleImportSlot: (value) => { this.pendingSampleImportSlot = value; },
+        setPreferredTransportMode: (value) => { this.preferredTransportMode = value; },
+        setSampleEditorViewOverride: (value) => { this.sampleEditorViewOverride = value; },
         setSamplePage: (value) => { this.samplePage = value; },
         setSamplePreviewPlaying: (value) => { this.samplePreviewPlaying = value; },
         setSnapshot: (snapshot) => { this.snapshot = snapshot; },
@@ -1652,6 +1693,11 @@ export class TrackerApplication {
       return;
     }
 
+    if (!isEditableTarget(event.target)) {
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+    }
+
     if (!this.engine || !this.snapshot || isEditableTarget(event.target)) {
       return;
     }
@@ -1677,19 +1723,38 @@ export class TrackerApplication {
     }
 
     if (outcome.transport) {
-      this.engine.setTransport(outcome.transport);
+      if (outcome.transport.type === 'transport/toggle') {
+        const playMode = this.preferredTransportMode;
+        this.engine.setTransport({
+          type: this.snapshot.transport.playing
+            ? 'transport/pause'
+            : playMode === 'pattern'
+              ? 'transport/play-pattern'
+              : 'transport/play-song',
+        });
+      } else {
+        if (outcome.transport.type === 'transport/play-song') {
+          this.preferredTransportMode = 'song';
+        } else if (outcome.transport.type === 'transport/play-pattern') {
+          this.preferredTransportMode = 'pattern';
+        }
+        this.engine.setTransport(outcome.transport);
+      }
       this.snapshot = this.engine.getSnapshot();
       this.updateModernLiveRegions(this.snapshot);
     }
 
     if (outcome.command) {
       if (outcome.command.type === 'pattern/set-cell' && outcome.command.patch.note) {
-        if (event.repeat || this.modernPressedNoteKeys.has(event.code)) {
+        const lastAcceptedAt = this.modernRecentNoteKeyTimes.get(event.code) ?? -Infinity;
+        if (event.repeat || this.modernPressedNoteKeys.has(event.code) || (event.timeStamp - lastAcceptedAt) < 40) {
           return;
         }
 
         this.modernPressedNoteKeys.add(event.code);
+        this.modernRecentNoteKeyTimes.set(event.code, event.timeStamp);
         const channel = this.snapshot.cursor.channel;
+        this.suppressNextModernRender = true;
         this.engine.dispatch(outcome.command);
         this.previewModernNote(outcome.command.patch.note, channel);
         const absolute = noteToAbsolute(outcome.command.patch.note);
@@ -1697,6 +1762,7 @@ export class TrackerApplication {
           this.triggerPianoGlow(channel, absolute);
         }
         this.snapshot = this.engine.getSnapshot();
+        this.suppressNextModernRender = true;
         this.moveModernCursor(this.snapshot.cursor.row + 1, channel, 'note');
         this.updateModernLiveRegions(this.snapshot);
         return;
@@ -1710,6 +1776,8 @@ export class TrackerApplication {
 
   private handleKeyUp(event: KeyboardEvent): void {
     if (this.viewMode === 'modern' && !isEditableTarget(event.target)) {
+      event.stopPropagation();
+      event.stopImmediatePropagation();
       const note = getKeyboardNoteFromKey(event.key, this.keyboardOctave);
       if (note) {
         this.modernPressedNoteKeys.delete(event.code);
@@ -1738,6 +1806,16 @@ export class TrackerApplication {
       event.altKey,
       event.metaKey,
     );
+  }
+
+  private handleKeyPress(event: KeyboardEvent): void {
+    if (this.viewMode !== 'modern' || isEditableTarget(event.target)) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
   }
 
   private applyCellPatch(row: number, channel: number, patch: Partial<PatternCell>): void {
@@ -1833,15 +1911,34 @@ export class TrackerApplication {
     this.updateSamplePanel(snapshot);
     this.updateTrackMuteButtons(snapshot);
 
-    const transportPlay = this.root.querySelector<HTMLButtonElement>('[data-role="module-transport-play"]');
-    if (transportPlay) {
-      transportPlay.disabled = snapshot.transport.playing;
-      transportPlay.classList.toggle('is-active', snapshot.transport.playing);
+    const playbackMode = snapshot.transport.playing ? snapshot.transport.mode : this.preferredTransportMode;
+    const transportToggle = this.root.querySelector<HTMLButtonElement>('[data-role="module-transport-toggle"]');
+    if (transportToggle) {
+      transportToggle.disabled = false;
+      transportToggle.classList.toggle('is-active', snapshot.transport.playing);
+      transportToggle.dataset.action = 'transport-toggle';
+      transportToggle.title = snapshot.transport.playing ? 'Pause playback' : (playbackMode === 'pattern' ? 'Play pattern' : 'Play module');
+      transportToggle.setAttribute('aria-label', transportToggle.title);
+      transportToggle.innerHTML = `${iconMarkup(snapshot.transport.playing ? Pause : Play)}<span class="sr-only">${transportToggle.title}</span>`;
     }
 
-    const transportPause = this.root.querySelector<HTMLButtonElement>('[data-role="module-transport-pause"]');
-    if (transportPause) {
-      transportPause.disabled = !snapshot.transport.playing;
+    const transportMode = this.root.querySelector<HTMLButtonElement>('[data-role="module-transport-mode"]');
+    if (transportMode) {
+      transportMode.classList.toggle('is-active', playbackMode === 'pattern');
+      transportMode.title = playbackMode === 'pattern' ? 'Pattern playback' : 'Module playback';
+      transportMode.setAttribute('aria-label', transportMode.title);
+      const modeValue = transportMode.querySelector<HTMLElement>('.tool-icon-button__value');
+      if (modeValue) {
+        modeValue.textContent = playbackMode === 'pattern' ? 'P' : 'M';
+      }
+    }
+
+    const audioMode = this.root.querySelector<HTMLButtonElement>('[data-role="module-audio-mode"]');
+    if (audioMode) {
+      audioMode.classList.toggle('is-active', !snapshot.audio.stereo);
+      audioMode.title = snapshot.audio.stereo ? 'Stereo playback' : 'Mono playback';
+      audioMode.setAttribute('aria-label', audioMode.title);
+      audioMode.innerHTML = `${iconMarkup(Volume2)}<span class="tool-icon-button__value" aria-hidden="true">${snapshot.audio.stereo ? 'S' : 'M'}</span><span class="sr-only">${audioMode.title}</span>`;
     }
 
     for (const action of [

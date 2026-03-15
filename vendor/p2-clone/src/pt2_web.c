@@ -71,8 +71,9 @@ static int8_t scopeBuffer[(PAULA_VOICES * (2 + 64))];
 static char moduleExportPath[PATH_MAX + 1];
 static char sampleExportPath[PATH_MAX + 1];
 static char recentModuleName[PATH_MAX + 1];
+static bool pt2webStereoEnabled = true;
 
-#define PT2_WEB_SAMPLE_PREVIEW_POINTS 48
+#define PT2_WEB_SAMPLE_PREVIEW_POINTS 256
 
 static int8_t clampInt8(int32_t value, int32_t low, int32_t high)
 {
@@ -809,6 +810,8 @@ int32_t pt2_web_load_file_from_path(const char *fullPath, int32_t autoPlay)
 
 int32_t pt2_web_engine_boot(void)
 {
+	audioSetStereoSeparation(100);
+	pt2webStereoEnabled = true;
 	return song != NULL;
 }
 
@@ -1225,6 +1228,12 @@ void pt2_web_engine_sample_play(int32_t mode)
 	}
 }
 
+void pt2_web_engine_toggle_stereo(void)
+{
+	pt2webStereoEnabled = !pt2webStereoEnabled;
+	audioSetStereoSeparation(pt2webStereoEnabled ? 100 : 0);
+}
+
 void pt2_web_engine_preview_note(const char *note, int32_t channel)
 {
 	if (song == NULL || song->sampleData == NULL)
@@ -1507,6 +1516,10 @@ const char *pt2_web_engine_snapshot_json(void)
 		video.fullscreen ? "true" : "false");
 
 	offset = (size_t)jsonAppend(snapshotJSON, sizeof (snapshotJSON), offset,
+		",\"audio\":{\"stereo\":%s}",
+		pt2webStereoEnabled ? "true" : "false");
+
+	offset = (size_t)jsonAppend(snapshotJSON, sizeof (snapshotJSON), offset,
 		",\"song\":{\"title\":");
 	offset = (size_t)jsonAppendQuotedString(snapshotJSON, sizeof (snapshotJSON), offset, song->header.name);
 	offset = (size_t)jsonAppend(snapshotJSON, sizeof (snapshotJSON), offset,
@@ -1514,10 +1527,10 @@ const char *pt2_web_engine_snapshot_json(void)
 		song->currPattern, song->currPos, song->header.songLength, getModuleSizeBytes());
 
 	offset = (size_t)jsonAppend(snapshotJSON, sizeof (snapshotJSON), offset,
-		",\"transport\":{\"playing\":%s,\"mode\":\"%s\",\"bpm\":%d,\"speed\":%d,\"row\":%d,\"pattern\":%d,\"position\":%d}",
+		",\"transport\":{\"playing\":%s,\"mode\":\"%s\",\"bpm\":%d,\"speed\":%d,\"elapsedSeconds\":%u,\"row\":%d,\"pattern\":%d,\"position\":%d}",
 		editor.songPlaying ? "true" : "false",
 		(editor.playMode == PLAY_MODE_PATTERN) ? "pattern" : "song",
-		song->currBPM, song->currSpeed, song->currRow, song->currPattern, song->currPos);
+		song->currBPM, song->currSpeed, editor.playbackSeconds, song->currRow, song->currPattern, song->currPos);
 
 	offset = (size_t)jsonAppend(snapshotJSON, sizeof (snapshotJSON), offset,
 		",\"editor\":{\"editMode\":%s,\"recordMode\":%s,\"muted\":[%s,%s,%s,%s]}",

@@ -181,7 +181,7 @@ export const getSamplePanelKey = (
 export const renderSampleWaveform = (sample: SampleSlot): string => {
   const values = sample.preview && sample.preview.length > 0
     ? sample.preview
-    : Array.from({ length: 48 }, () => 0);
+    : Array.from({ length: 256 }, () => 0);
 
   const width = 240;
   const height = 72;

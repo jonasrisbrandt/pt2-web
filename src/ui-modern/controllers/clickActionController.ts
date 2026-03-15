@@ -2,6 +2,7 @@ import type { CursorField, TrackerSnapshot } from '../../core/trackerTypes';
 import type { TrackerEngine } from '../../core/trackerEngine';
 import { clamp, MAX_OCTAVE, MIN_OCTAVE, SAMPLE_PAGE_SIZE } from '../../ui/appShared';
 import { saveModuleFile, saveModuleFileAs } from './fileController';
+import type { TransportMode } from '../../core/trackerTypes';
 
 export type ViewMode = 'modern' | 'classic';
 
@@ -18,6 +19,7 @@ export interface ModernClickActionContext {
   moduleInput: HTMLInputElement;
   sampleInput: HTMLInputElement;
   keyboardOctave: number;
+  preferredTransportMode: TransportMode;
   sampleEditorViewOverride: SampleEditorViewOverride | null;
   canEditSnapshot: (snapshot: TrackerSnapshot) => boolean;
   clearSampleEditorViewOverride: () => void;
@@ -33,6 +35,7 @@ export interface ModernClickActionContext {
   setKeyboardOctave: (value: number) => void;
   setLastSelectedSample: (value: number) => void;
   setPendingSampleImportSlot: (value: number | null) => void;
+  setPreferredTransportMode: (value: TransportMode) => void;
   setSampleEditorViewOverride: (value: SampleEditorViewOverride | null) => void;
   setSamplePage: (value: number) => void;
   setSamplePreviewPlaying: (value: boolean) => void;
@@ -50,6 +53,7 @@ export const handleModernClickAction = async ({
   moduleInput,
   sampleInput,
   keyboardOctave,
+  preferredTransportMode,
   sampleEditorViewOverride,
   canEditSnapshot,
   clearSampleEditorViewOverride,
@@ -65,6 +69,7 @@ export const handleModernClickAction = async ({
   setKeyboardOctave,
   setLastSelectedSample,
   setPendingSampleImportSlot,
+  setPreferredTransportMode,
   setSampleEditorViewOverride,
   setSamplePage,
   setSamplePreviewPlaying,
@@ -94,9 +99,32 @@ export const handleModernClickAction = async ({
       sampleInput.click();
       return true;
     case 'toggle-play':
-      engine.setTransport({ type: 'transport/toggle' });
+    case 'transport-toggle':
+      if (snapshot.transport.playing) {
+        engine.setTransport({ type: 'transport/pause' });
+      } else if (preferredTransportMode === 'pattern') {
+        engine.setTransport({ type: 'transport/play-pattern' });
+      } else {
+        engine.setTransport({ type: 'transport/play-song' });
+      }
+      return true;
+    case 'transport-toggle-mode': {
+      const nextMode: TransportMode = preferredTransportMode === 'pattern' ? 'song' : 'pattern';
+      setPreferredTransportMode(nextMode);
+      if (snapshot.transport.playing) {
+        engine.setTransport({ type: nextMode === 'pattern' ? 'transport/play-pattern' : 'transport/play-song' });
+      } else {
+        updateModernLiveRegions(snapshot);
+      }
+      return true;
+    }
+    case 'audio-toggle-stereo':
+      engine.dispatch({ type: 'audio/toggle-stereo' });
+      setSnapshot(engine.getSnapshot());
+      updateModernLiveRegions(engine.getSnapshot());
       return true;
     case 'transport-play-song':
+      setPreferredTransportMode('song');
       engine.setTransport({ type: 'transport/play-song' });
       return true;
     case 'transport-pause':

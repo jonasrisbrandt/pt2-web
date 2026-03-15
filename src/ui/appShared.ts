@@ -120,9 +120,7 @@ export const getVisualizationLabel = (mode: VisualizationMode): string => {
 };
 
 export const formatSongTime = (snapshot: TrackerSnapshot): string => {
-  const secondsPerRow = (snapshot.transport.speed * 2.5) / Math.max(1, snapshot.transport.bpm);
-  const totalRows = (snapshot.transport.position * 64) + snapshot.transport.row;
-  const totalSeconds = Math.max(0, Math.floor(totalRows * secondsPerRow));
+  const totalSeconds = Math.max(0, snapshot.transport.elapsedSeconds);
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;

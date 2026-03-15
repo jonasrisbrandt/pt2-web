@@ -38,6 +38,7 @@ void pt2_web_engine_sample_toggle_loop(int32_t enabled);
 void pt2_web_engine_sample_crop(void);
 void pt2_web_engine_sample_cut(void);
 void pt2_web_engine_sample_play(int32_t mode);
+void pt2_web_engine_toggle_stereo(void);
 void pt2_web_engine_preview_note(const char *note, int32_t channel);
 void pt2_web_engine_preview_note_stop(void);
 void pt2_web_engine_transport_play_song(void);

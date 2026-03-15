@@ -16,6 +16,7 @@ export interface TrackerApplicationEventBindings {
   onRootInput: (event: Event) => void;
   onRootMouseOver: (event: MouseEvent) => void;
   onWindowKeyDown: (event: KeyboardEvent) => void;
+  onWindowKeyPress: (event: KeyboardEvent) => void;
   onWindowKeyUp: (event: KeyboardEvent) => void;
   onWindowPointerDown: (event: MouseEvent) => void;
   onWindowBlur: () => void;
@@ -44,6 +45,7 @@ export const bindTrackerApplicationEvents = ({
   onRootInput,
   onRootMouseOver,
   onWindowKeyDown,
+  onWindowKeyPress,
   onWindowKeyUp,
   onWindowPointerDown,
   onWindowBlur,
@@ -68,8 +70,9 @@ export const bindTrackerApplicationEvents = ({
   root.addEventListener('input', onRootInput);
   root.addEventListener('mouseover', onRootMouseOver);
 
-  window.addEventListener('keydown', onWindowKeyDown);
-  window.addEventListener('keyup', onWindowKeyUp);
+  window.addEventListener('keydown', onWindowKeyDown, { capture: true });
+  window.addEventListener('keypress', onWindowKeyPress, { capture: true });
+  window.addEventListener('keyup', onWindowKeyUp, { capture: true });
   window.addEventListener('mousedown', onWindowPointerDown);
   window.addEventListener('blur', onWindowBlur);
   window.addEventListener('resize', onWindowResize);

@@ -314,6 +314,9 @@ export class WasmTrackerEngine implements TrackerEngine {
       case 'sample-editor/play':
         this.callVoid('pt2_web_engine_sample_play', ['number'], [command.mode === 'selection' ? 2 : command.mode === 'view' ? 1 : 0]);
         break;
+      case 'audio/toggle-stereo':
+        this.callVoid('pt2_web_engine_toggle_stereo', [], []);
+        break;
       case 'note-preview/play':
         this.callVoid('pt2_web_engine_preview_note', ['string', 'number'], [command.note, command.channel]);
         break;
