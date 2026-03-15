@@ -13,36 +13,94 @@ import type {
 } from './core/trackerTypes';
 import {
   escapeHtml,
-  formatCellEffect,
   formatCellNote,
-  formatCellParam,
-  formatCellSample,
   formatSampleLength,
 } from './ui/formatters';
 import {
-  buildPianoKeys,
-  brighten,
-  CHANNEL_COLORS,
   clamp,
-  CURSOR_FIELDS,
-  darken,
   formatSongTime,
   getVisualizationLabel,
-  hexToRgb,
   MAX_OCTAVE,
   MIN_OCTAVE,
-  mixRgb,
-  moveCursorHorizontally,
-  noteToAbsolute,
   PIANO_END_ABSOLUTE,
-  PIANO_START_ABSOLUTE,
-  rgba,
   SAMPLE_PAGE_SIZE,
-  spectrumColorAt,
-  triggerDownload,
   VISUALIZATION_MODES,
   type VisualizationMode,
 } from './ui/appShared';
+import { bindTrackerApplicationEvents } from './ui-modern/controllers/eventBindings';
+import {
+  handleModernClickAction,
+  type SampleEditorViewOverride,
+} from './ui-modern/controllers/clickActionController';
+import { loadModuleFromInput, loadSampleFromInput } from './ui-modern/controllers/fileController';
+import { handleModernInputAction } from './ui-modern/controllers/inputController';
+import {
+  beginSampleEditorPointer,
+  completeSampleEditorPointer,
+  handleModernHexEntry as handleModernHexEntryInput,
+  handlePatternCanvasPointer as handleModernPatternCanvasPointer,
+  handlePianoPointer as handleModernPianoPointer,
+  resolvePatternFieldFromPointer as resolveModernPatternFieldFromPointer,
+  type SampleEditorPointerState,
+  updateSampleEditorPointer,
+  zoomSampleEditorFromWheel,
+} from './ui-modern/controllers/interactionController';
+import {
+  setLiveText as setModernLiveText,
+  updateSamplePanel as updateModernSamplePanel,
+  updateTrackMuteButtons as updateModernTrackMuteButtons,
+} from './ui-modern/controllers/liveUiController';
+import {
+  getClassicLogicalPointerPosition as getModernClassicLogicalPointerPosition,
+  handleClassicKeyDown as handleModernClassicKeyDown,
+  releaseClassicKeys as releaseModernClassicKeys,
+  updateClassicDebugPanel as updateModernClassicDebugPanel,
+  updateClassicDomDebugPointer,
+} from './ui-modern/classic/classicBridgeController';
+import {
+  renderAppShellMarkup,
+  renderPatternEditorPanel,
+} from './ui-modern/components/appShellRenderer';
+import {
+  getSampleCardLabel as getModernSampleCardLabel,
+  getSamplePageCount as getModernSamplePageCount,
+  getSamplePanelKey as getModernSamplePanelKey,
+  getSelectedSampleHeading as getModernSelectedSampleHeading,
+  renderClassicDebug as renderModernClassicDebug,
+  renderModuleStepperCard as renderModernModuleStepperCard,
+  renderModuleValueCard as renderModernModuleValueCard,
+  renderModernPatternRow as renderModernPatternRowMarkup,
+  renderPatternPaddingRow as renderModernPatternPaddingRow,
+  renderSampleBank as renderModernSampleBank,
+  renderSampleEditorPanel as renderModernSampleEditorPanel,
+  renderSelectedSamplePanel as renderModernSelectedSamplePanel,
+  renderToolbarButton as renderModernToolbarButton,
+  renderTrackHeader as renderModernTrackHeader,
+  renderTransportButtonContent as renderModernTransportButtonContent,
+} from './ui-modern/components/markupRenderer';
+import {
+  drawPatternCanvas as drawModernPatternCanvas,
+  getPatternCanvasLayout as getModernPatternCanvasLayout,
+  getPatternFieldRects as getModernPatternFieldRects,
+  getPatternViewportStartRow as getModernPatternViewportStartRow,
+} from './ui-modern/components/patternCanvasRenderer';
+import {
+  drawSampleEditor as drawModernSampleEditor,
+  drawSelectedSamplePreview as drawModernSelectedSamplePreview,
+  getSampleEditorLayout as getModernSampleEditorLayout,
+  sampleOffsetToEditorX as sampleOffsetToModernEditorX,
+} from './ui-modern/components/sampleWaveformRenderer';
+import {
+  decayPianoGlowLevels,
+  drawPianoVisualizer as drawModernPianoVisualizer,
+  drawQuadrascopeClassic as drawModernQuadrascopeClassic,
+  drawQuadrascopeStack as drawModernQuadrascopeStack,
+  drawSignalTrails as drawModernSignalTrails,
+  drawSpectrumAnalyzer as drawModernSpectrumAnalyzer,
+  syncPianoNotes as syncModernPianoNotes,
+  triggerPianoGlow as triggerModernPianoGlow,
+} from './ui-modern/components/visualizationRenderer';
+import { createTrackerAppDom } from './ui-modern/session/appDom';
 
 const DEFAULT_STATUS = 'Initializing ProTracker 2 web clone...';
 const SHOW_CLASSIC_DEBUG = false;
@@ -97,13 +155,8 @@ export class TrackerApplication {
   private sampleWaveformKey: string | null = null;
   private samplePreviewPlaying = false;
   private syncingAutoEditMode = false;
-  private sampleEditorViewOverride: { sample: number; start: number; length: number } | null = null;
-  private sampleEditorPointer: {
-    mode: 'idle' | 'select' | 'loop-start' | 'loop-end';
-    active: boolean;
-    anchor: number;
-    current: number;
-  } = {
+  private sampleEditorViewOverride: SampleEditorViewOverride | null = null;
+  private sampleEditorPointer: SampleEditorPointerState = {
     mode: 'idle',
     active: false,
     anchor: 0,
@@ -127,92 +180,61 @@ export class TrackerApplication {
     this.root = root;
     this.config = config;
 
-    this.moduleInput = document.createElement('input');
-    this.moduleInput.type = 'file';
-    this.moduleInput.accept = '.mod,.m15,.stk,.nst,.ust,.pp,.nt';
-    this.moduleInput.hidden = true;
-
-    this.sampleInput = document.createElement('input');
-    this.sampleInput.type = 'file';
-    this.sampleInput.accept = '.wav,.iff,.aiff,.aif,.raw';
-    this.sampleInput.hidden = true;
-
-    this.patternCanvas = document.createElement('canvas');
-    this.patternCanvas.className = 'pattern-canvas';
-    this.patternCanvas.width = 960;
-    this.patternCanvas.height = 470;
-    this.patternCanvas.tabIndex = 0;
-    this.patternCanvas.setAttribute('aria-label', 'Modern pattern editor');
-    this.patternCanvas.addEventListener('mousedown', (event) => this.handlePatternCanvasPointer(event));
-
-    this.samplePreviewCanvas = document.createElement('canvas');
-    this.samplePreviewCanvas.className = 'sample-preview-canvas';
-    this.samplePreviewCanvas.width = 480;
-    this.samplePreviewCanvas.height = SAMPLE_PREVIEW_HEIGHT;
-    this.samplePreviewCanvas.setAttribute('aria-label', 'Selected sample preview');
-
-    this.sampleEditorCanvas = document.createElement('canvas');
-    this.sampleEditorCanvas.className = 'sample-editor-canvas';
-    this.sampleEditorCanvas.width = 960;
-    this.sampleEditorCanvas.height = SAMPLE_EDITOR_HEIGHT;
-    this.sampleEditorCanvas.setAttribute('aria-label', 'Sample editor');
-    this.sampleEditorCanvas.addEventListener('mousedown', (event) => this.handleSampleEditorPointerDown(event));
-    this.sampleEditorCanvas.addEventListener('wheel', (event) => this.handleSampleEditorWheel(event), { passive: false });
-
-    this.quadrascopeCanvas = document.createElement('canvas');
-    this.quadrascopeCanvas.className = 'quadrascope-canvas';
-    this.quadrascopeCanvas.width = 960;
-    this.quadrascopeCanvas.height = QUADRASCOPE_HEIGHT;
-    this.quadrascopeCanvas.setAttribute('aria-label', 'Quadrascope visualizer');
-
-    this.spectrumCanvas = document.createElement('canvas');
-    this.spectrumCanvas.className = 'spectrum-canvas';
-    this.spectrumCanvas.width = 960;
-    this.spectrumCanvas.height = SPECTRUM_HEIGHT;
-    this.spectrumCanvas.setAttribute('aria-label', 'Spectrum analyzer');
-
-    this.trailsCanvas = document.createElement('canvas');
-    this.trailsCanvas.className = 'trails-canvas';
-    this.trailsCanvas.width = 960;
-    this.trailsCanvas.height = QUADRASCOPE_HEIGHT;
-    this.trailsCanvas.setAttribute('aria-label', 'Signal trails visualizer');
-
-    this.pianoCanvas = document.createElement('canvas');
-    this.pianoCanvas.className = 'piano-canvas';
-    this.pianoCanvas.width = 960;
-    this.pianoCanvas.height = PIANO_HEIGHT;
-    this.pianoCanvas.setAttribute('aria-label', 'Tracker piano visualizer');
-    this.pianoCanvas.addEventListener('mousedown', (event) => this.handlePianoPointer(event));
+    const dom = createTrackerAppDom(
+      SAMPLE_PREVIEW_HEIGHT,
+      SAMPLE_EDITOR_HEIGHT,
+      QUADRASCOPE_HEIGHT,
+      SPECTRUM_HEIGHT,
+      PIANO_HEIGHT,
+    );
+    this.moduleInput = dom.moduleInput;
+    this.sampleInput = dom.sampleInput;
+    this.patternCanvas = dom.patternCanvas;
+    this.samplePreviewCanvas = dom.samplePreviewCanvas;
+    this.sampleEditorCanvas = dom.sampleEditorCanvas;
+    this.quadrascopeCanvas = dom.quadrascopeCanvas;
+    this.spectrumCanvas = dom.spectrumCanvas;
+    this.trailsCanvas = dom.trailsCanvas;
+    this.pianoCanvas = dom.pianoCanvas;
 
     this.root.append(this.moduleInput, this.sampleInput);
 
-    this.root.addEventListener('click', (event) => void this.handleClick(event));
-    this.root.addEventListener('change', (event) => void this.handleChange(event));
-    this.root.addEventListener('input', (event) => this.handleInput(event));
-    window.addEventListener('keydown', (event) => this.handleKeyDown(event));
-    window.addEventListener('keyup', (event) => this.handleKeyUp(event));
-    window.addEventListener('blur', () => this.releaseClassicKeys());
-    this.config.canvas.addEventListener('mousemove', (event) => this.handleClassicCanvasPointerMove(event));
-    this.config.canvas.addEventListener('mousedown', (event) => this.handleClassicCanvasPointerButton(event, true));
-    this.config.canvas.addEventListener('mouseup', (event) => this.handleClassicCanvasPointerButton(event, false));
-    this.config.canvas.addEventListener('mouseenter', (event) => {
-      this.classicDomDebug.inside = true;
-      this.handleClassicCanvasPointer(event);
+    bindTrackerApplicationEvents({
+      root: this.root,
+      config: this.config,
+      dom,
+      onPatternCanvasPointer: (event) => this.handlePatternCanvasPointer(event),
+      onSampleEditorPointerDown: (event) => this.handleSampleEditorPointerDown(event),
+      onSampleEditorWheel: (event) => this.handleSampleEditorWheel(event),
+      onPianoPointer: (event) => this.handlePianoPointer(event),
+      onRootClick: (event) => this.handleClick(event),
+      onRootChange: (event) => this.handleChange(event),
+      onRootInput: (event) => this.handleInput(event),
+      onWindowKeyDown: (event) => this.handleKeyDown(event),
+      onWindowKeyUp: (event) => this.handleKeyUp(event),
+      onWindowBlur: () => this.releaseClassicKeys(),
+      onClassicCanvasPointerMove: (event) => this.handleClassicCanvasPointerMove(event),
+      onClassicCanvasPointerButtonDown: (event) => this.handleClassicCanvasPointerButton(event, true),
+      onClassicCanvasPointerButtonUp: (event) => this.handleClassicCanvasPointerButton(event, false),
+      onClassicCanvasPointerEnter: (event) => {
+        this.classicDomDebug.inside = true;
+        this.handleClassicCanvasPointer(event);
+      },
+      onClassicCanvasPointerLeave: () => {
+        this.classicDomDebug.inside = false;
+        this.updateClassicDebugPanel(this.snapshot);
+      },
+      onWindowResize: () => {
+        if (this.snapshot && this.viewMode === 'modern') {
+          this.drawPatternCanvas(this.snapshot);
+          this.drawSelectedSamplePreview(this.snapshot);
+          this.drawSampleEditor(this.snapshot);
+          this.drawVisualization(this.snapshot);
+        }
+      },
+      onWindowMouseMove: (event) => this.handleSampleEditorPointerMove(event),
+      onWindowMouseUp: () => this.handleSampleEditorPointerUp(),
     });
-    this.config.canvas.addEventListener('mouseleave', () => {
-      this.classicDomDebug.inside = false;
-      this.updateClassicDebugPanel(this.snapshot);
-    });
-    window.addEventListener('resize', () => {
-      if (this.snapshot && this.viewMode === 'modern') {
-        this.drawPatternCanvas(this.snapshot);
-        this.drawSelectedSamplePreview(this.snapshot);
-        this.drawSampleEditor(this.snapshot);
-        this.drawVisualization(this.snapshot);
-      }
-    });
-    window.addEventListener('mousemove', (event) => this.handleSampleEditorPointerMove(event));
-    window.addEventListener('mouseup', () => this.handleSampleEditorPointerUp());
   }
 
   async init(): Promise<void> {
@@ -275,109 +297,59 @@ export class TrackerApplication {
     const sampleEditorOpen = snapshot.sampleEditor.open;
     const shell = document.createElement('div');
     shell.className = `app-shell app-shell--${this.viewMode}`;
-    shell.innerHTML = `
-      <section class="toolbar">
-        <div class="toolbar-group">
-          ${this.renderToolbarButton('new-song', FilePlus, 'New')}
-          ${this.renderToolbarButton('load-module', FolderOpen, 'Load')}
-          ${this.renderToolbarButton('save-module', Download, 'Export')}
-        </div>
-        <div class="toolbar-group toolbar-group--views">
-          <div class="view-toggle" role="tablist" aria-label="View mode">
-            ${this.renderToolbarButton('view-modern', Monitor, 'Modern', this.viewMode === 'modern')}
-            ${this.renderToolbarButton('view-classic', View, 'Classic', this.viewMode === 'classic')}
-          </div>
-        </div>
-      </section>
+    const moduleCardsHtml = [
+      this.renderModuleStepperCard('Position', String(snapshot.transport.position).padStart(2, '0'), 'position', 'song-position-down', 'song-position-up', this.canEditSnapshot(snapshot)),
+      this.renderModuleStepperCard('Pattern', String(snapshot.pattern.index).padStart(2, '0'), 'pattern', 'song-pattern-down', 'song-pattern-up', this.canEditSnapshot(snapshot)),
+      this.renderModuleStepperCard('Length', String(snapshot.song.length).padStart(2, '0'), 'length', 'song-length-down', 'song-length-up', this.canEditSnapshot(snapshot)),
+      this.renderModuleStepperCard('BPM', String(snapshot.transport.bpm), 'bpm', 'song-bpm-down', 'song-bpm-up', this.canEditSnapshot(snapshot)),
+      this.renderModuleValueCard('Time', formatSongTime(snapshot), 'time'),
+    ].join('');
+    const toolbarPrimaryHtml = [
+      this.renderToolbarButton('new-song', FilePlus, 'New'),
+      this.renderToolbarButton('load-module', FolderOpen, 'Load'),
+      this.renderToolbarButton('save-module', Download, 'Export'),
+    ].join('');
+    const viewToggleHtml = [
+      this.renderToolbarButton('view-modern', Monitor, 'Modern', this.viewMode === 'modern'),
+      this.renderToolbarButton('view-classic', View, 'Classic', this.viewMode === 'classic'),
+    ].join('');
+    const trackHeadersHtml = [
+      this.renderTrackHeader(0, snapshot),
+      this.renderTrackHeader(1, snapshot),
+      this.renderTrackHeader(2, snapshot),
+      this.renderTrackHeader(3, snapshot),
+    ].join('');
+    const editorPanelHtml = sampleEditorOpen
+      ? this.renderSampleEditorPanel(snapshot)
+      : renderPatternEditorPanel({
+        octave: this.keyboardOctave,
+        octaveDownIconHtml: iconMarkup(ChevronLeft),
+        octaveUpIconHtml: iconMarkup(ChevronRight),
+        trackHeadersHtml,
+      });
 
-      <main class="workspace">
-        <section class="tracker-stack">
-          <article class="panel module-panel">
-            <div class="panel-head compact module-head">
-              <div>
-                <p class="panel-label">Module</p>
-                <h2 class="panel-title--subtle" data-role="song-title">${escapeHtml(snapshot.song.title || 'UNTITLED')}</h2>
-              </div>
-              <div class="module-actions">
-                <button type="button" class="toolbar-button toolbar-button--primary module-action-button" data-role="transport-toggle" data-action="${snapshot.transport.playing ? 'stop' : 'toggle-play'}">${this.renderTransportButtonContent(snapshot)}</button>
-              </div>
-            </div>
-            <div class="module-grid">
-              ${this.renderModuleStepperCard('Position', String(snapshot.transport.position).padStart(2, '0'), 'position', 'song-position-down', 'song-position-up', this.canEditSnapshot(snapshot))}
-              ${this.renderModuleStepperCard('Pattern', String(snapshot.pattern.index).padStart(2, '0'), 'pattern', 'song-pattern-down', 'song-pattern-up', this.canEditSnapshot(snapshot))}
-              ${this.renderModuleStepperCard('Length', String(snapshot.song.length).padStart(2, '0'), 'length', 'song-length-down', 'song-length-up', this.canEditSnapshot(snapshot))}
-              ${this.renderModuleStepperCard('BPM', String(snapshot.transport.bpm), 'bpm', 'song-bpm-down', 'song-bpm-up', this.canEditSnapshot(snapshot))}
-              ${this.renderModuleValueCard('Time', formatSongTime(snapshot), 'time')}
-            </div>
-          </article>
-
-          <article class="panel visualization-panel">
-            <div class="panel-head compact">
-              <div>
-                <p class="panel-label">Visualization</p>
-                <h2 class="panel-title--subtle" data-role="visualization-label">${escapeHtml(getVisualizationLabel(this.visualizationMode))}</h2>
-              </div>
-              <div class="visualization-controls">
-                <button type="button" class="icon-button" data-action="visualization-prev">${iconMarkup(ChevronLeft)}<span class="sr-only">Previous visualization</span></button>
-                <button type="button" class="icon-button" data-action="visualization-next">${iconMarkup(ChevronRight)}<span class="sr-only">Next visualization</span></button>
-              </div>
-            </div>
-            <div class="visualization-host" data-role="visualization-host"></div>
-          </article>
-
-          ${sampleEditorOpen ? this.renderSampleEditorPanel(snapshot) : `
-            <article class="panel pattern-panel editor-panel-shell">
-              <div class="panel-head compact">
-                <div>
-                  <p class="panel-label">Pattern editor</p>
-                </div>
-                <div class="octave-control">
-                  <button type="button" class="icon-button" data-action="octave-down">${iconMarkup(ChevronLeft)}<span class="sr-only">Lower octave</span></button>
-                  <span class="octave-value" data-role="octave-value">Octave ${this.keyboardOctave}</span>
-                  <button type="button" class="icon-button" data-action="octave-up">${iconMarkup(ChevronRight)}<span class="sr-only">Raise octave</span></button>
-                </div>
-              </div>
-              <div class="pattern-header">
-                <span>Row</span>
-                ${this.renderTrackHeader(0, snapshot)}
-                ${this.renderTrackHeader(1, snapshot)}
-                ${this.renderTrackHeader(2, snapshot)}
-                ${this.renderTrackHeader(3, snapshot)}
-              </div>
-              <div class="pattern-canvas-host" data-role="pattern-host"></div>
-            </article>
-          `}
-        </section>
-
-        <aside class="inspector-stack">
-          <section class="panel inspector-panel">
-            <div class="panel-head compact">
-              <div>
-                <p class="panel-label">Samples</p>
-              </div>
-              <div class="visualization-controls">
-                <span class="panel-title--subtle" data-role="sample-page-label">Page ${samplePage + 1} / ${samplePageCount}</span>
-                <button type="button" class="icon-button" data-action="sample-page-prev" ${samplePage <= 0 ? 'disabled' : ''}>${iconMarkup(ChevronLeft)}<span class="sr-only">Previous sample page</span></button>
-                <button type="button" class="icon-button" data-action="sample-page-next" ${samplePage >= samplePageCount - 1 ? 'disabled' : ''}>${iconMarkup(ChevronRight)}<span class="sr-only">Next sample page</span></button>
-              </div>
-            </div>
-            <div class="sample-bank" data-role="sample-bank">${sampleButtons}</div>
-            <div data-role="sample-detail-content">${this.renderSelectedSamplePanel(selectedSample, snapshot)}</div>
-          </section>
-
-          <section class="panel canvas-panel">
-            <div class="panel-head compact">
-              <div>
-                <p class="panel-label">Classic</p>
-                <h2>Original ProTracker UI</h2>
-              </div>
-            </div>
-            ${this.renderClassicDebug()}
-            <div class="engine-canvas-host"></div>
-          </section>
-        </aside>
-      </main>
-    `;
+    shell.innerHTML = renderAppShellMarkup({
+      viewMode: this.viewMode,
+      toolbarPrimaryHtml,
+      viewToggleHtml,
+      songTitle: escapeHtml(snapshot.song.title || 'UNTITLED'),
+      transportAction: snapshot.transport.playing ? 'stop' : 'toggle-play',
+      transportButtonContentHtml: this.renderTransportButtonContent(snapshot),
+      moduleCardsHtml,
+      visualizationLabel: escapeHtml(getVisualizationLabel(this.visualizationMode)),
+      visualizationPrevIconHtml: iconMarkup(ChevronLeft),
+      visualizationNextIconHtml: iconMarkup(ChevronRight),
+      editorPanelHtml,
+      samplePage,
+      samplePageCount,
+      sampleButtonsHtml: sampleButtons,
+      selectedSamplePanelHtml: this.renderSelectedSamplePanel(selectedSample, snapshot),
+      classicDebugHtml: this.renderClassicDebug(),
+      samplePagePrevDisabled: samplePage <= 0,
+      samplePageNextDisabled: samplePage >= samplePageCount - 1,
+      samplePagePrevIconHtml: iconMarkup(ChevronLeft),
+      samplePageNextIconHtml: iconMarkup(ChevronRight),
+    });
 
     this.root.querySelector('.app-shell')?.remove();
     this.root.prepend(shell);
@@ -420,11 +392,11 @@ export class TrackerApplication {
   }
 
   private renderToolbarButton(action: string, iconNode: unknown, label: string, active = false): string {
-    return `<button type="button" class="toolbar-button${active ? ' is-active' : ''}" data-action="${action}">${iconMarkup(iconNode)}<span>${escapeHtml(label)}</span></button>`;
+    return renderModernToolbarButton(action, iconMarkup(iconNode), label, active);
   }
 
   private renderTransportButtonContent(snapshot: TrackerSnapshot): string {
-    return `${iconMarkup(snapshot.transport.playing ? Square : Play)}<span>${snapshot.transport.playing ? 'Stop' : 'Play'}</span>`;
+    return renderModernTransportButtonContent(snapshot.transport.playing, iconMarkup(snapshot.transport.playing ? Square : Play));
   }
 
   private canEditSnapshot(snapshot: TrackerSnapshot | null): boolean {
@@ -465,47 +437,16 @@ export class TrackerApplication {
     upAction: string,
     enabled: boolean,
   ): string {
-    return `
-      <div class="module-card module-card--stepper">
-        <span class="metric-label">${escapeHtml(label)}</span>
-        <div class="module-stepper">
-          <strong class="module-stepper__value" data-role="metric-${role}">${escapeHtml(value)}</strong>
-          <div class="module-stepper__buttons">
-            <button type="button" class="icon-button icon-button--small" data-action="${downAction}" ${enabled ? '' : 'disabled'}>${iconMarkup(ChevronDown)}<span class="sr-only">Decrease ${escapeHtml(label)}</span></button>
-            <button type="button" class="icon-button icon-button--small" data-action="${upAction}" ${enabled ? '' : 'disabled'}>${iconMarkup(ChevronUp)}<span class="sr-only">Increase ${escapeHtml(label)}</span></button>
-          </div>
-        </div>
-      </div>
-    `;
+    return renderModernModuleStepperCard(label, value, role, downAction, upAction, enabled, iconMarkup(ChevronDown), iconMarkup(ChevronUp));
   }
 
   private renderModuleValueCard(label: string, value: string, role: string): string {
-    return `
-      <div class="module-card module-card--readout">
-        <span class="metric-label">${escapeHtml(label)}</span>
-        <div class="module-readout">
-          <strong class="module-readout__value" data-role="metric-${role}">${escapeHtml(value)}</strong>
-        </div>
-      </div>
-    `;
+    return renderModernModuleValueCard(label, value, role);
   }
 
   private renderTrackHeader(channel: number, snapshot: TrackerSnapshot): string {
     const muted = snapshot.editor.muted[channel] ?? false;
-    return `
-      <span class="track-label track-label--${channel + 1}${muted ? ' is-muted' : ''}">
-        <button
-          type="button"
-          class="track-mute-button${muted ? ' is-muted' : ''}"
-          data-role="track-mute-${channel}"
-          data-action="toggle-track-mute"
-          data-channel="${channel}"
-          aria-pressed="${muted ? 'true' : 'false'}"
-          aria-label="${muted ? 'Unmute track' : 'Mute track'} ${channel + 1}"
-        >${iconMarkup(muted ? VolumeX : Volume2)}</button>
-        <span>Track ${channel + 1}</span>
-      </span>
-    `;
+    return renderModernTrackHeader(channel, muted, iconMarkup(muted ? VolumeX : Volume2));
   }
 
   private mountVisualization(snapshot: TrackerSnapshot): void {
@@ -617,70 +558,13 @@ export class TrackerApplication {
     }
 
     this.refreshSelectedSampleWaveform(snapshot);
-
-    const widthSource = this.samplePreviewCanvas.parentElement?.clientWidth
-      || this.samplePreviewCanvas.getBoundingClientRect().width
-      || 420;
-    if (widthSource <= 0) {
-      return;
-    }
-
-    const width = Math.max(280, Math.round(widthSource));
-    const height = SAMPLE_PREVIEW_HEIGHT;
-    const dpr = window.devicePixelRatio || 1;
-
-    if (this.samplePreviewCanvas.width !== Math.round(width * dpr) || this.samplePreviewCanvas.height !== Math.round(height * dpr)) {
-      this.samplePreviewCanvas.width = Math.round(width * dpr);
-      this.samplePreviewCanvas.height = Math.round(height * dpr);
-      this.samplePreviewCanvas.style.width = '100%';
-      this.samplePreviewCanvas.style.height = `${height}px`;
-    }
-
-    const ctx = this.samplePreviewCanvas.getContext('2d');
-    if (!ctx) {
-      return;
-    }
-
-    const sample = snapshot.samples[snapshot.selectedSample];
-    const data = this.getWaveformSource(sample);
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = 'rgba(8, 13, 10, 0.92)';
-    this.drawRoundedRect(ctx, 0, 0, width, height, 18);
-    ctx.fill();
-
-    const gradient = ctx.createLinearGradient(0, 0, width, 0);
-    gradient.addColorStop(0, 'rgba(212, 255, 117, 0.06)');
-    gradient.addColorStop(0.5, 'rgba(120, 240, 191, 0.12)');
-    gradient.addColorStop(1, 'rgba(90, 184, 255, 0.08)');
-    ctx.fillStyle = gradient;
-    this.drawRoundedRect(ctx, 0, 0, width, height, 18);
-    ctx.fill();
-
-    if (sample.length <= 0 || data.length <= 0) {
-      ctx.fillStyle = 'rgba(239, 248, 231, 0.52)';
-      ctx.font = '15px "Trebuchet MS", "Segoe UI", sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('Select an empty slot to load a sample', width / 2, height / 2);
-      return;
-    }
-
-    const plotLeft = 14;
-    const plotTop = 14;
-    const plotWidth = width - 28;
-    const plotHeight = height - 28;
-    this.drawWaveformPath(ctx, data, 0, data.length, plotLeft, plotTop, plotWidth, plotHeight, 'rgba(120, 240, 191, 0.95)', 'rgba(120, 240, 191, 0.12)');
-
-    if (sample.loopLength > 2) {
-      const loopStartX = plotLeft + ((sample.loopStart / Math.max(1, sample.length)) * plotWidth);
-      const loopEndX = plotLeft + (((sample.loopStart + sample.loopLength) / Math.max(1, sample.length)) * plotWidth);
-      ctx.fillStyle = 'rgba(90, 184, 255, 0.08)';
-      this.drawRoundedRect(ctx, loopStartX, plotTop + 8, Math.max(2, loopEndX - loopStartX), plotHeight - 16, 8);
-      ctx.fill();
-      this.drawSampleMarker(ctx, loopStartX, plotTop, plotHeight, '#5ab8ff');
-      this.drawSampleMarker(ctx, loopEndX, plotTop, plotHeight, '#5ab8ff');
-    }
+    drawModernSelectedSamplePreview({
+      canvas: this.samplePreviewCanvas,
+      snapshot,
+      height: SAMPLE_PREVIEW_HEIGHT,
+      getWaveformSource: (sample) => this.getWaveformSource(sample),
+      drawRoundedRect: (ctx, x, y, width, height, radius) => this.drawRoundedRect(ctx, x, y, width, height, radius),
+    });
   }
 
   private drawSampleEditor(snapshot: TrackerSnapshot): void {
@@ -689,294 +573,24 @@ export class TrackerApplication {
     }
 
     this.refreshSelectedSampleWaveform(snapshot);
-
-    const widthSource = this.sampleEditorCanvas.parentElement?.clientWidth
-      || this.sampleEditorCanvas.getBoundingClientRect().width
-      || 960;
-    if (widthSource <= 0) {
-      return;
-    }
-
-    const width = Math.max(420, Math.round(widthSource));
-    const height = SAMPLE_EDITOR_HEIGHT;
-    const dpr = window.devicePixelRatio || 1;
-
-    if (this.sampleEditorCanvas.width !== Math.round(width * dpr) || this.sampleEditorCanvas.height !== Math.round(height * dpr)) {
-      this.sampleEditorCanvas.width = Math.round(width * dpr);
-      this.sampleEditorCanvas.height = Math.round(height * dpr);
-      this.sampleEditorCanvas.style.width = '100%';
-      this.sampleEditorCanvas.style.height = `${height}px`;
-    }
-
-    const ctx = this.sampleEditorCanvas.getContext('2d');
-    if (!ctx) {
-      return;
-    }
-
-    const sample = snapshot.samples[snapshot.selectedSample];
-    const data = this.getWaveformSource(sample);
-    const layout = this.getSampleEditorLayout(width, height);
-    const selection = this.getDraftSampleSelection(snapshot);
-    const loop = this.getDraftSampleLoop(snapshot);
-
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = 'rgba(8, 13, 10, 0.92)';
-    this.drawRoundedRect(ctx, 0, 0, width, height, 18);
-    ctx.fill();
-
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.035)';
-    this.drawRoundedRect(ctx, layout.left, layout.top, layout.width, layout.height, 14);
-    ctx.fill();
-
-    const view = this.getSampleEditorView(snapshot);
-    if (sample.length <= 0 || data.length <= 0 || view.length <= 0) {
-      ctx.fillStyle = 'rgba(239, 248, 231, 0.52)';
-      ctx.font = '15px "Trebuchet MS", "Segoe UI", sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('The selected sample is empty', width / 2, height / 2);
-      return;
-    }
-
-    const visibleStart = view.start;
-    const visibleEnd = view.end;
-    this.drawWaveformPath(ctx, data, visibleStart, visibleEnd, layout.left, layout.top, layout.width, layout.height, 'rgba(120, 240, 191, 0.98)', 'rgba(120, 240, 191, 0.1)');
-
-    const selectionStart = selection.start;
-    const selectionEnd = selection.end;
-    if (selectionStart !== null && selectionEnd !== null) {
-      const x1 = this.sampleOffsetToEditorX(selectionStart, snapshot, layout);
-      const x2 = this.sampleOffsetToEditorX(selectionEnd, snapshot, layout);
-      ctx.fillStyle = 'rgba(212, 255, 117, 0.14)';
-      this.drawRoundedRect(ctx, Math.min(x1, x2), layout.top + 10, Math.max(2, Math.abs(x2 - x1)), layout.height - 20, 10);
-      ctx.fill();
-    }
-
-    if (sample.loopLength > 2) {
-      const loopStartX = this.sampleOffsetToEditorX(loop.start, snapshot, layout);
-      const loopEndX = this.sampleOffsetToEditorX(loop.end, snapshot, layout);
-      ctx.fillStyle = 'rgba(90, 184, 255, 0.1)';
-      this.drawRoundedRect(ctx, Math.min(loopStartX, loopEndX), layout.top + 10, Math.max(2, Math.abs(loopEndX - loopStartX)), layout.height - 20, 10);
-      ctx.fill();
-      this.drawSampleMarker(ctx, loopStartX, layout.top, layout.height, '#5ab8ff');
-      this.drawSampleMarker(ctx, loopEndX, layout.top, layout.height, '#5ab8ff');
-    }
-
-    ctx.fillStyle = 'rgba(239, 248, 231, 0.72)';
-    ctx.font = '13px Consolas, "Courier New", monospace';
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'top';
-    ctx.fillText(`Start ${visibleStart}`, layout.left, layout.top + layout.height + 8);
-    ctx.fillText(`End ${visibleEnd}`, layout.left + layout.width - 92, layout.top + layout.height + 8);
-  }
-
-  private drawWaveformPath(
-    ctx: CanvasRenderingContext2D,
-    data: Int8Array,
-    start: number,
-    end: number,
-    left: number,
-    top: number,
-    width: number,
-    height: number,
-    stroke: string,
-    fill: string,
-  ): void {
-    const safeStart = clamp(start, 0, Math.max(0, data.length - 1));
-    const safeEnd = clamp(end, safeStart + 1, data.length);
-    const span = Math.max(1, safeEnd - safeStart);
-    const centerY = top + (height / 2);
-    const samplesPerPixel = span / Math.max(1, width);
-
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
-    ctx.beginPath();
-    ctx.moveTo(left, centerY);
-    ctx.lineTo(left + width, centerY);
-    ctx.stroke();
-
-    if (samplesPerPixel > 1.25) {
-      const barGradient = ctx.createLinearGradient(left, top, left + width, top);
-      barGradient.addColorStop(0, 'rgba(212, 255, 117, 0.9)');
-      barGradient.addColorStop(0.55, stroke);
-      barGradient.addColorStop(1, 'rgba(90, 184, 255, 0.82)');
-
-      const glowGradient = ctx.createLinearGradient(left, top, left + width, top);
-      glowGradient.addColorStop(0, 'rgba(212, 255, 117, 0.08)');
-      glowGradient.addColorStop(0.55, fill);
-      glowGradient.addColorStop(1, 'rgba(90, 184, 255, 0.07)');
-
-      ctx.fillStyle = glowGradient;
-      let previousTopY = centerY;
-      let previousBottomY = centerY;
-      for (let pixel = 0; pixel < width; pixel += 1) {
-        const from = safeStart + Math.floor((pixel / width) * span);
-        const to = Math.min(safeEnd, safeStart + Math.max(1, Math.floor(((pixel + 1) / width) * span)));
-        let minValue = 127;
-        let maxValue = -128;
-
-        for (let index = from; index < to; index += 1) {
-          const value = data[index] ?? 0;
-          if (value < minValue) {
-            minValue = value;
-          }
-          if (value > maxValue) {
-            maxValue = value;
-          }
-        }
-
-        if (minValue > maxValue) {
-          minValue = 0;
-          maxValue = 0;
-        }
-
-        const x = left + pixel;
-        const topY = centerY - ((maxValue / 128) * (height * 0.42));
-        const bottomY = centerY - ((minValue / 128) * (height * 0.42));
-        const glowY = Math.round(Math.min(topY, bottomY)) - 1;
-        const glowH = Math.max(3, Math.round(Math.abs(bottomY - topY)) + 2);
-        ctx.fillRect(x, glowY, 1, glowH);
-
-        if (pixel > 0) {
-          if (topY > previousBottomY) {
-            const bridgeY = Math.round(previousBottomY);
-            const bridgeH = Math.max(1, Math.round(topY - previousBottomY));
-            ctx.fillRect(x, bridgeY, 1, bridgeH);
-          }
-
-          if (bottomY < previousTopY) {
-            const bridgeY = Math.round(bottomY);
-            const bridgeH = Math.max(1, Math.round(previousTopY - bottomY));
-            ctx.fillRect(x, bridgeY, 1, bridgeH);
-          }
-        }
-
-        previousTopY = topY;
-        previousBottomY = bottomY;
-      }
-
-      ctx.fillStyle = barGradient;
-      previousTopY = centerY;
-      previousBottomY = centerY;
-      for (let pixel = 0; pixel < width; pixel += 1) {
-        const from = safeStart + Math.floor((pixel / width) * span);
-        const to = Math.min(safeEnd, safeStart + Math.max(1, Math.floor(((pixel + 1) / width) * span)));
-        let minValue = 127;
-        let maxValue = -128;
-
-        for (let index = from; index < to; index += 1) {
-          const value = data[index] ?? 0;
-          if (value < minValue) {
-            minValue = value;
-          }
-          if (value > maxValue) {
-            maxValue = value;
-          }
-        }
-
-        if (minValue > maxValue) {
-          minValue = 0;
-          maxValue = 0;
-        }
-
-        const x = left + pixel;
-        const topY = centerY - ((maxValue / 128) * (height * 0.42));
-        const bottomY = centerY - ((minValue / 128) * (height * 0.42));
-        const y = Math.round(Math.min(topY, bottomY));
-        const h = Math.max(1, Math.round(Math.abs(bottomY - topY)));
-        ctx.fillRect(x, y, 1, h);
-
-        if (pixel > 0) {
-          if (topY > previousBottomY) {
-            const bridgeY = Math.round(previousBottomY);
-            const bridgeH = Math.max(1, Math.round(topY - previousBottomY));
-            ctx.fillRect(x, bridgeY, 1, bridgeH);
-          }
-
-          if (bottomY < previousTopY) {
-            const bridgeY = Math.round(bottomY);
-            const bridgeH = Math.max(1, Math.round(previousTopY - bottomY));
-            ctx.fillRect(x, bridgeY, 1, bridgeH);
-          }
-        }
-
-        previousTopY = topY;
-        previousBottomY = bottomY;
-      }
-
-      return;
-    }
-
-    const points: Array<{ x: number; y: number }> = [];
-    for (let pixel = 0; pixel < width; pixel += 1) {
-      const samplePos = safeStart + Math.floor((pixel / Math.max(1, width - 1)) * Math.max(0, span - 1));
-      const value = data[samplePos] ?? 0;
-      const x = left + pixel;
-      points.push({
-        x,
-        y: centerY - ((value / 128) * (height * 0.42)),
-      });
-    }
-
-    if (points.length === 0) {
-      return;
-    }
-
-    const strokeGradient = ctx.createLinearGradient(left, top, left + width, top);
-    strokeGradient.addColorStop(0, 'rgba(212, 255, 117, 0.34)');
-    strokeGradient.addColorStop(0.55, stroke);
-    strokeGradient.addColorStop(1, 'rgba(138, 199, 255, 0.28)');
-
-    ctx.beginPath();
-    ctx.moveTo(points[0].x, points[0].y);
-    for (let index = 1; index < points.length; index += 1) {
-      ctx.lineTo(points[index].x, points[index].y);
-    }
-    ctx.strokeStyle = strokeGradient;
-    ctx.lineWidth = 1.15;
-    ctx.lineJoin = 'round';
-    ctx.lineCap = 'round';
-    ctx.stroke();
-
-    ctx.beginPath();
-    ctx.moveTo(points[0].x, centerY);
-    for (const point of points) {
-      ctx.lineTo(point.x, point.y);
-    }
-    ctx.lineTo(points[points.length - 1].x, centerY);
-    ctx.closePath();
-    ctx.fillStyle = fill;
-    ctx.fill();
-  }
-
-  private drawSampleMarker(ctx: CanvasRenderingContext2D, x: number, top: number, height: number, color: string): void {
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(x, top + 8);
-    ctx.lineTo(x, top + height - 8);
-    ctx.stroke();
-
-    ctx.fillStyle = color;
-    this.drawRoundedRect(ctx, x - 5, top + 4, 10, 10, 4);
-    ctx.fill();
+    drawModernSampleEditor({
+      canvas: this.sampleEditorCanvas,
+      snapshot,
+      height: SAMPLE_EDITOR_HEIGHT,
+      getWaveformSource: (sample) => this.getWaveformSource(sample),
+      getSampleEditorView: (nextSnapshot) => this.getSampleEditorView(nextSnapshot),
+      getDraftSampleSelection: (nextSnapshot) => this.getDraftSampleSelection(nextSnapshot),
+      getDraftSampleLoop: (nextSnapshot) => this.getDraftSampleLoop(nextSnapshot),
+      drawRoundedRect: (ctx, x, y, width, height, radius) => this.drawRoundedRect(ctx, x, y, width, height, radius),
+    });
   }
 
   private getSampleEditorLayout(width: number, height: number): { left: number; top: number; width: number; height: number } {
-    return {
-      left: 18,
-      top: 18,
-      width: width - 36,
-      height: height - 56,
-    };
+    return getModernSampleEditorLayout(width, height);
   }
 
   private sampleOffsetToEditorX(offset: number, snapshot: TrackerSnapshot, layout: { left: number; top: number; width: number; height: number }): number {
-    const view = this.getSampleEditorView(snapshot);
-    const visibleStart = view.start;
-    const visibleLength = Math.max(1, view.length);
-    const normalized = (offset - visibleStart) / visibleLength;
-    return layout.left + (clamp(normalized, 0, 1) * layout.width);
+    return sampleOffsetToModernEditorX(offset, this.getSampleEditorView(snapshot), layout);
   }
 
   private sampleEditorXToOffset(clientX: number, snapshot: TrackerSnapshot): number {
@@ -1049,487 +663,83 @@ export class TrackerApplication {
     if (this.viewMode !== 'modern') {
       return;
     }
-
-    const widthSource = this.quadrascopeCanvas.parentElement?.clientWidth
-      || this.quadrascopeCanvas.getBoundingClientRect().width
-      || 960;
-    if (widthSource <= 0) {
-      return;
-    }
-
-    const width = Math.max(220, Math.round(widthSource));
-    const height = QUADRASCOPE_HEIGHT;
-    const dpr = window.devicePixelRatio || 1;
-
-    if (this.quadrascopeCanvas.width !== Math.round(width * dpr) || this.quadrascopeCanvas.height !== Math.round(height * dpr)) {
-      this.quadrascopeCanvas.width = Math.round(width * dpr);
-      this.quadrascopeCanvas.height = Math.round(height * dpr);
-      this.quadrascopeCanvas.style.width = '100%';
-      this.quadrascopeCanvas.style.height = `${height}px`;
-    }
-
-    const ctx = this.quadrascopeCanvas.getContext('2d');
-    if (!ctx) {
-      return;
-    }
-
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = 'rgba(8, 13, 10, 0.92)';
-    this.drawRoundedRect(ctx, 0, 0, width, height, 18);
-    ctx.fill();
-    ctx.font = '14px Consolas, "Courier New", monospace';
-    ctx.textBaseline = 'middle';
-
-    const laneHeight = (height - 36) / 4;
-    const scopeChannels = quadrascope?.channels ?? [];
-
-    for (let channel = 0; channel < 4; channel += 1) {
-      const laneTop = 16 + (channel * laneHeight);
-      const laneMid = laneTop + (laneHeight / 2);
-      const scopeChannel = scopeChannels[channel];
-      const samplePoints = scopeChannel?.sample ?? [];
-      const volume = scopeChannel?.volume ?? 0;
-      const active = scopeChannel?.active ?? false;
-
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.04)';
-      this.drawRoundedRect(ctx, 10, laneTop, width - 20, laneHeight - 10, 12);
-      ctx.fill();
-
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
-      ctx.beginPath();
-      ctx.moveTo(16, laneMid);
-      ctx.lineTo(width - 16, laneMid);
-      ctx.stroke();
-
-      ctx.strokeStyle = CHANNEL_COLORS[channel];
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-
-      const pointCount = samplePoints.length > 0 ? samplePoints.length : 64;
-      for (let index = 0; index < pointCount; index += 1) {
-        const normalizedX = index / Math.max(1, pointCount - 1);
-        const sampleValue = samplePoints[index] ?? 0;
-        const normalizedSample = clamp(sampleValue, -128, 127) / 128;
-        const y = laneMid + (normalizedSample * laneHeight * 0.36);
-        const x = 16 + (normalizedX * (width - 32));
-
-        if (index === 0) {
-          ctx.moveTo(x, y);
-        } else {
-          ctx.lineTo(x, y);
-        }
-      }
-
-      ctx.stroke();
-      ctx.fillStyle = CHANNEL_COLORS[channel];
-      ctx.fillText(`CH${channel + 1}`, 18, laneTop + 14);
-      ctx.fillStyle = 'rgba(239, 248, 231, 0.72)';
-      ctx.fillText(active ? `VOL ${String(volume).padStart(2, '0')}` : 'IDLE', width - 86, laneTop + 14);
-    }
+    drawModernQuadrascopeStack({
+      canvas: this.quadrascopeCanvas,
+      quadrascope,
+      height: QUADRASCOPE_HEIGHT,
+      drawRoundedRect: (ctx, x, y, width, height, radius) => this.drawRoundedRect(ctx, x, y, width, height, radius),
+    });
   }
 
   private drawQuadrascopeClassic(quadrascope: QuadrascopeState | null): void {
     if (this.viewMode !== 'modern') {
       return;
     }
-
-    const widthSource = this.quadrascopeCanvas.parentElement?.clientWidth
-      || this.quadrascopeCanvas.getBoundingClientRect().width
-      || 960;
-    if (widthSource <= 0) {
-      return;
-    }
-
-    const width = Math.max(220, Math.round(widthSource));
-    const height = QUADRASCOPE_HEIGHT;
-    const dpr = window.devicePixelRatio || 1;
-
-    if (this.quadrascopeCanvas.width !== Math.round(width * dpr) || this.quadrascopeCanvas.height !== Math.round(height * dpr)) {
-      this.quadrascopeCanvas.width = Math.round(width * dpr);
-      this.quadrascopeCanvas.height = Math.round(height * dpr);
-      this.quadrascopeCanvas.style.width = '100%';
-      this.quadrascopeCanvas.style.height = `${height}px`;
-    }
-
-    const ctx = this.quadrascopeCanvas.getContext('2d');
-    if (!ctx) {
-      return;
-    }
-
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = 'rgba(8, 13, 10, 0.92)';
-    this.drawRoundedRect(ctx, 0, 0, width, height, 18);
-    ctx.fill();
-    ctx.font = '13px Consolas, "Courier New", monospace';
-    ctx.textBaseline = 'middle';
-
-    const columnWidth = (width - 30) / 4;
-    const scopeChannels = quadrascope?.channels ?? [];
-
-    for (let channel = 0; channel < 4; channel += 1) {
-      const x = 10 + (channel * columnWidth);
-      const y = 14;
-      const w = columnWidth - 8;
-      const h = height - 28;
-      const midY = y + (h / 2);
-      const scopeChannel = scopeChannels[channel];
-      const samplePoints = scopeChannel?.sample ?? [];
-
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.04)';
-      this.drawRoundedRect(ctx, x, y, w, h, 12);
-      ctx.fill();
-
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
-      ctx.beginPath();
-      ctx.moveTo(x + 8, midY);
-      ctx.lineTo(x + w - 8, midY);
-      ctx.stroke();
-
-      ctx.strokeStyle = CHANNEL_COLORS[channel];
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-
-      const pointCount = samplePoints.length > 0 ? samplePoints.length : 64;
-      for (let index = 0; index < pointCount; index += 1) {
-        const t = index / Math.max(1, pointCount - 1);
-        const sampleValue = samplePoints[index] ?? 0;
-        const normalizedSample = clamp(sampleValue, -128, 127) / 128;
-        const pointX = x + 8 + (t * (w - 16));
-        const pointY = midY + (normalizedSample * h * 0.34);
-        if (index === 0) {
-          ctx.moveTo(pointX, pointY);
-        } else {
-          ctx.lineTo(pointX, pointY);
-        }
-      }
-
-      ctx.stroke();
-      ctx.fillStyle = CHANNEL_COLORS[channel];
-      ctx.fillText(`CH${channel + 1}`, x + 10, y + 14);
-    }
+    drawModernQuadrascopeClassic({
+      canvas: this.quadrascopeCanvas,
+      quadrascope,
+      height: QUADRASCOPE_HEIGHT,
+      drawRoundedRect: (ctx, x, y, width, height, radius) => this.drawRoundedRect(ctx, x, y, width, height, radius),
+    });
   }
 
   private drawSpectrumAnalyzer(quadrascope: QuadrascopeState | null): void {
     if (this.viewMode !== 'modern') {
       return;
     }
-
-    const widthSource = this.spectrumCanvas.parentElement?.clientWidth
-      || this.spectrumCanvas.getBoundingClientRect().width
-      || 960;
-    if (widthSource <= 0) {
-      return;
-    }
-
-    const width = Math.max(220, Math.round(widthSource));
-    const height = SPECTRUM_HEIGHT;
-    const dpr = window.devicePixelRatio || 1;
-
-    if (this.spectrumCanvas.width !== Math.round(width * dpr) || this.spectrumCanvas.height !== Math.round(height * dpr)) {
-      this.spectrumCanvas.width = Math.round(width * dpr);
-      this.spectrumCanvas.height = Math.round(height * dpr);
-      this.spectrumCanvas.style.width = '100%';
-      this.spectrumCanvas.style.height = `${height}px`;
-    }
-
-    const ctx = this.spectrumCanvas.getContext('2d');
-    if (!ctx) {
-      return;
-    }
-
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = 'rgba(8, 13, 10, 0.92)';
-    this.drawRoundedRect(ctx, 0, 0, width, height, 18);
-    ctx.fill();
-
-    const bgGradient = ctx.createLinearGradient(0, 0, width, 0);
-    bgGradient.addColorStop(0, 'rgba(212, 255, 117, 0.05)');
-    bgGradient.addColorStop(0.35, 'rgba(120, 240, 191, 0.04)');
-    bgGradient.addColorStop(0.7, 'rgba(138, 199, 255, 0.045)');
-    bgGradient.addColorStop(1, 'rgba(255, 191, 122, 0.05)');
-    ctx.fillStyle = bgGradient;
-    this.drawRoundedRect(ctx, 0, 0, width, height, 18);
-    ctx.fill();
-
-    ctx.strokeStyle = 'rgba(239, 248, 231, 0.06)';
-    ctx.lineWidth = 1;
-    for (let line = 1; line <= 4; line += 1) {
-      const y = 12 + (((height - 24) / 5) * line);
-      ctx.beginPath();
-      ctx.moveTo(14, y);
-      ctx.lineTo(width - 14, y);
-      ctx.stroke();
-    }
-
-    const channels = quadrascope?.channels ?? [];
-    const allSamples = channels.flatMap((channel) => channel.sample);
-    const compactSpectrum = this.visualizationMode === 'split';
-    const barCount = compactSpectrum
-      ? Math.max(32, Math.floor(width / 12))
-      : Math.max(24, Math.floor(width / 24));
-    const usableHeight = height - 24;
-    const slotWidth = (width - 28) / barCount;
-    const barWidth = compactSpectrum
-      ? Math.max(4, Math.min(7, slotWidth - 1))
-      : Math.max(8, Math.min(14, slotWidth - 1));
-
-    for (let bar = 0; bar < barCount; bar += 1) {
-      const start = Math.floor((bar / barCount) * allSamples.length);
-      const end = Math.max(start + 1, Math.floor(((bar + 1) / barCount) * allSamples.length));
-      let energy = 0;
-      for (let index = start; index < end; index += 1) {
-        energy += Math.abs(allSamples[index] ?? 0);
-      }
-
-      const normalized = allSamples.length === 0 ? 0 : clamp((energy / Math.max(1, end - start)) / 96, 0, 1);
-      const barHeight = Math.max(4, Math.round(normalized * usableHeight));
-      const x = 14 + (bar * slotWidth);
-      const y = height - 12 - barHeight;
-      const baseColor = spectrumColorAt(bar / Math.max(1, barCount - 1));
-      const topColor = brighten(baseColor, 0.18 + (normalized * 0.28));
-      const bottomColor = darken(baseColor, 0.38);
-      const gradient = ctx.createLinearGradient(x, y, x, height - 12);
-      gradient.addColorStop(0, rgba(topColor, 0.96));
-      gradient.addColorStop(0.45, rgba(baseColor, 0.78));
-      gradient.addColorStop(1, rgba(bottomColor, 0.35));
-      ctx.fillStyle = gradient;
-      this.drawRoundedRect(ctx, x, y, barWidth, barHeight, Math.min(6, barWidth * 0.5));
-      ctx.fill();
-    }
+    drawModernSpectrumAnalyzer({
+      canvas: this.spectrumCanvas,
+      quadrascope,
+      height: SPECTRUM_HEIGHT,
+      compact: this.visualizationMode === 'split',
+      drawRoundedRect: (ctx, x, y, width, height, radius) => this.drawRoundedRect(ctx, x, y, width, height, radius),
+    });
   }
 
   private drawSignalTrails(quadrascope: QuadrascopeState | null): void {
     if (this.viewMode !== 'modern') {
       return;
     }
-
-    const widthSource = this.trailsCanvas.parentElement?.clientWidth
-      || this.trailsCanvas.getBoundingClientRect().width
-      || 960;
-    if (widthSource <= 0) {
-      return;
-    }
-
-    const width = Math.max(220, Math.round(widthSource));
-    const height = QUADRASCOPE_HEIGHT;
-    const dpr = window.devicePixelRatio || 1;
-
-    if (this.trailsCanvas.width !== Math.round(width * dpr) || this.trailsCanvas.height !== Math.round(height * dpr)) {
-      this.trailsCanvas.width = Math.round(width * dpr);
-      this.trailsCanvas.height = Math.round(height * dpr);
-      this.trailsCanvas.style.width = '100%';
-      this.trailsCanvas.style.height = `${height}px`;
-    }
-
-    const ctx = this.trailsCanvas.getContext('2d');
-    if (!ctx) {
-      return;
-    }
-
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = 'rgba(8, 13, 10, 0.92)';
-    this.drawRoundedRect(ctx, 0, 0, width, height, 18);
-    ctx.fill();
-
-    const channels = quadrascope?.channels ?? [];
-    const laneHeight = (height - 28) / 4;
-    const historyLength = Math.max(64, Math.floor(width / 5));
-
-    for (let channel = 0; channel < 4; channel += 1) {
-      const laneTop = 12 + (channel * laneHeight);
-      const laneMid = laneTop + (laneHeight / 2);
-      const samples = channels[channel]?.sample ?? [];
-      const energy = samples.reduce((sum, value) => sum + Math.abs(value), 0) / Math.max(1, samples.length);
-
-      const history = this.trailColumns[channel];
-      history.push(energy);
-      if (history.length > historyLength) {
-        history.shift();
-      }
-
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.035)';
-      this.drawRoundedRect(ctx, 10, laneTop, width - 20, laneHeight - 8, 10);
-      ctx.fill();
-
-      history.forEach((value, index) => {
-        const t = index / Math.max(1, historyLength - 1);
-        const alpha = 0.08 + (t * 0.88);
-        const amplitude = clamp(value / 72, 0, 1);
-        const barHeight = Math.max(2, amplitude * (laneHeight - 18));
-        const x = 14 + (index * ((width - 28) / historyLength));
-        const y = laneMid - (barHeight / 2);
-        ctx.fillStyle = rgba(brighten(hexToRgb(CHANNEL_COLORS[channel]), amplitude * 0.3), alpha);
-        this.drawRoundedRect(ctx, x, y, 3, barHeight, 3);
-        ctx.fill();
-      });
-
-      ctx.fillStyle = CHANNEL_COLORS[channel];
-      ctx.font = '12px Consolas, "Courier New", monospace';
-      ctx.fillText(`CH${channel + 1}`, 18, laneTop + 12);
-    }
+    drawModernSignalTrails({
+      canvas: this.trailsCanvas,
+      quadrascope,
+      trailColumns: this.trailColumns,
+      height: QUADRASCOPE_HEIGHT,
+      drawRoundedRect: (ctx, x, y, width, height, radius) => this.drawRoundedRect(ctx, x, y, width, height, radius),
+    });
   }
 
   private syncPianoNotes(snapshot: TrackerSnapshot, quadrascope: QuadrascopeState | null): void {
-    if (!snapshot.transport.playing) {
-      this.lastPianoTransportKey = null;
-      return;
-    }
-
-    const transportKey = `${snapshot.transport.position}:${snapshot.transport.pattern}:${snapshot.transport.row}`;
-    if (transportKey !== this.lastPianoTransportKey) {
-      const playingRow = snapshot.pattern.rows[snapshot.transport.row];
-      for (let channel = 0; channel < 4; channel += 1) {
-        const absolute = noteToAbsolute(playingRow?.channels[channel]?.note);
-        if (absolute !== null) {
-          this.activePianoNotes[channel] = absolute;
-          this.triggerPianoGlow(channel, absolute);
-        }
-      }
-
-      this.lastPianoTransportKey = transportKey;
-    }
+    void quadrascope;
+    this.lastPianoTransportKey = syncModernPianoNotes(
+      snapshot,
+      this.lastPianoTransportKey,
+      this.activePianoNotes,
+      this.pianoGlowLevels,
+    );
   }
 
   private triggerPianoGlow(channel: number, absolute: number): void {
-    const safeChannel = clamp(channel, 0, 3);
-    const safeNote = clamp(absolute, PIANO_START_ABSOLUTE, PIANO_END_ABSOLUTE);
-    this.pianoGlowLevels[safeChannel][safeNote] = 1;
+    triggerModernPianoGlow(this.pianoGlowLevels, channel, absolute);
   }
 
   private decayPianoGlow(): void {
-    const now = performance.now();
-    const deltaMs = this.pianoLastFrameAt === null ? 16 : Math.min(48, now - this.pianoLastFrameAt);
-    this.pianoLastFrameAt = now;
-    const decayFactor = Math.exp(-deltaMs / 180);
-
-    for (let channel = 0; channel < this.pianoGlowLevels.length; channel += 1) {
-      const levels = this.pianoGlowLevels[channel];
-      for (let note = PIANO_START_ABSOLUTE; note <= PIANO_END_ABSOLUTE; note += 1) {
-        levels[note] *= decayFactor;
-        if (levels[note] < 0.01) {
-          levels[note] = 0;
-        }
-      }
-    }
+    this.pianoLastFrameAt = decayPianoGlowLevels(this.pianoGlowLevels, this.pianoLastFrameAt);
   }
 
   private drawPianoVisualizer(snapshot: TrackerSnapshot, quadrascope: QuadrascopeState | null): void {
     if (this.viewMode !== 'modern') {
       return;
     }
-
-    const widthSource = this.pianoCanvas.parentElement?.clientWidth
-      || this.pianoCanvas.getBoundingClientRect().width
-      || 960;
-    if (widthSource <= 0) {
-      return;
-    }
-
-    const width = Math.max(220, Math.round(widthSource));
-    const height = PIANO_HEIGHT;
-    const dpr = window.devicePixelRatio || 1;
-
-    if (this.pianoCanvas.width !== Math.round(width * dpr) || this.pianoCanvas.height !== Math.round(height * dpr)) {
-      this.pianoCanvas.width = Math.round(width * dpr);
-      this.pianoCanvas.height = Math.round(height * dpr);
-      this.pianoCanvas.style.width = '100%';
-      this.pianoCanvas.style.height = `${height}px`;
-    }
-
-    const ctx = this.pianoCanvas.getContext('2d');
-    if (!ctx) {
-      return;
-    }
-
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = 'rgba(8, 13, 10, 0.92)';
-    this.drawRoundedRect(ctx, 0, 0, width, height, 18);
-    ctx.fill();
     this.decayPianoGlow();
-
-    const padding = 16;
-    const keyboardTop = 14;
-    const keyboardHeight = height - 28;
-    const keyboardWidth = width - (padding * 2);
-    const keys = buildPianoKeys(keyboardWidth);
-    const whiteKeys = keys.filter((key) => !key.black);
-    const blackKeys = keys.filter((key) => key.black);
     void snapshot;
     void quadrascope;
-
-    ctx.font = '11px Consolas, "Courier New", monospace';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'bottom';
-
-    for (const key of whiteKeys) {
-      const x = padding + key.x;
-      const keyLevels = this.pianoGlowLevels.map((levels) => levels[key.absolute] ?? 0);
-      const peakLevel = Math.max(...keyLevels);
-      const active = peakLevel > 0.01;
-
-      ctx.fillStyle = active
-        ? rgba(mixRgb({ r: 197, g: 206, b: 192 }, { r: 229, g: 238, b: 223 }, peakLevel), 0.82 + (peakLevel * 0.12))
-        : 'rgba(197, 206, 192, 0.82)';
-      this.drawRoundedRect(ctx, x, keyboardTop, key.width - 2, keyboardHeight, 10);
-      ctx.fill();
-
-      if (active) {
-        keyLevels.forEach((level, channel) => {
-          if (level <= 0.01) {
-            return;
-          }
-
-          ctx.fillStyle = rgba(brighten(hexToRgb(CHANNEL_COLORS[channel]), 0.04), 0.24 + (level * 0.64));
-          this.drawRoundedRect(ctx, x + 2, keyboardTop + 2, key.width - 6, keyboardHeight - 4, 8);
-          ctx.fill();
-        });
-      }
-
-      ctx.strokeStyle = active ? 'rgba(8, 13, 10, 0.55)' : 'rgba(8, 13, 10, 0.28)';
-      ctx.lineWidth = 1.2;
-      this.drawRoundedRect(ctx, x, keyboardTop, key.width - 2, keyboardHeight, 10);
-      ctx.stroke();
-
-      const showLabel = active || key.note.startsWith('C-');
-      if (showLabel) {
-        ctx.fillStyle = active ? 'rgba(8, 13, 10, 0.92)' : 'rgba(8, 13, 10, 0.68)';
-        ctx.fillText(key.note, x + ((key.width - 2) / 2), keyboardTop + keyboardHeight - 10);
-      }
-    }
-
-    const blackHeight = keyboardHeight * 0.66;
-    for (const key of blackKeys) {
-      const x = padding + key.x;
-      const keyLevels = this.pianoGlowLevels.map((levels) => levels[key.absolute] ?? 0);
-      const peakLevel = Math.max(...keyLevels);
-      const active = peakLevel > 0.01;
-
-      ctx.fillStyle = active ? 'rgba(24, 31, 29, 0.98)' : 'rgba(14, 18, 17, 0.98)';
-      this.drawRoundedRect(ctx, x, keyboardTop, key.width, blackHeight, 9);
-      ctx.fill();
-
-      if (active) {
-        keyLevels.forEach((level, channel) => {
-          if (level <= 0.01) {
-            return;
-          }
-
-          ctx.fillStyle = rgba(brighten(hexToRgb(CHANNEL_COLORS[channel]), 0.08), 0.34 + (level * 0.76));
-          this.drawRoundedRect(ctx, x + 2, keyboardTop + 2, key.width - 4, blackHeight - 4, 7);
-          ctx.fill();
-        });
-      }
-
-      ctx.strokeStyle = active ? 'rgba(239, 248, 231, 0.12)' : 'rgba(239, 248, 231, 0.08)';
-      ctx.lineWidth = 1;
-      this.drawRoundedRect(ctx, x, keyboardTop, key.width, blackHeight, 9);
-      ctx.stroke();
-    }
+    drawModernPianoVisualizer({
+      canvas: this.pianoCanvas,
+      pianoGlowLevels: this.pianoGlowLevels,
+      height: PIANO_HEIGHT,
+      drawRoundedRect: (ctx, x, y, width, height, radius) => this.drawRoundedRect(ctx, x, y, width, height, radius),
+    });
   }
 
   private drawPatternCanvas(snapshot: TrackerSnapshot): void {
@@ -1542,144 +752,17 @@ export class TrackerApplication {
       return;
     }
 
-    const width = Math.max(320, Math.round(host.clientWidth || host.getBoundingClientRect().width || 960));
-    const height = (MODERN_VISIBLE_PATTERN_ROWS * PATTERN_ROW_HEIGHT) + 20;
-    const dpr = window.devicePixelRatio || 1;
-
-    if (this.patternCanvas.width !== Math.round(width * dpr) || this.patternCanvas.height !== Math.round(height * dpr)) {
-      this.patternCanvas.width = Math.round(width * dpr);
-      this.patternCanvas.height = Math.round(height * dpr);
-      this.patternCanvas.style.width = `${width}px`;
-      this.patternCanvas.style.height = `${height}px`;
-    }
-
-    const ctx = this.patternCanvas.getContext('2d');
-    if (!ctx) {
-      return;
-    }
-
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = 'rgba(8, 13, 10, 0.92)';
-    this.drawRoundedRect(ctx, 0, 0, width, height, 18);
-    ctx.fill();
-
-    const layout = this.getPatternCanvasLayout(width);
-    const firstRow = this.getPatternViewportStartRow(snapshot);
-    const centeredRow = snapshot.transport.playing ? snapshot.transport.row : snapshot.cursor.row;
-
-    ctx.textBaseline = 'middle';
-    ctx.font = '16px Consolas, "Courier New", monospace';
-
-    for (let visibleIndex = 0; visibleIndex < MODERN_VISIBLE_PATTERN_ROWS; visibleIndex += 1) {
-      const rowIndex = firstRow + visibleIndex;
-      const y = 10 + (visibleIndex * PATTERN_ROW_HEIGHT);
-      const row = snapshot.pattern.rows[rowIndex];
-      const rowRectHeight = PATTERN_ROW_HEIGHT - 2;
-      const centered = rowIndex === centeredRow;
-
-      if (!row) {
-        ctx.globalAlpha = 0.18;
-        ctx.fillStyle = 'rgba(212, 255, 117, 0.06)';
-        this.drawRoundedRect(ctx, 8, y, width - 16, rowRectHeight, 12);
-        ctx.fill();
-        ctx.globalAlpha = 1;
-        continue;
-      }
-
-      if (centered) {
-        ctx.fillStyle = 'rgba(212, 255, 117, 0.09)';
-        this.drawRoundedRect(ctx, 8, y, width - 16, rowRectHeight, 12);
-        ctx.fill();
-      }
-
-      if (row.index === snapshot.transport.row) {
-        ctx.fillStyle = 'rgba(120, 240, 191, 0.12)';
-        this.drawRoundedRect(ctx, 8, y, width - 16, rowRectHeight, 12);
-        ctx.fill();
-      }
-
-      if (row.index === snapshot.cursor.row) {
-        ctx.strokeStyle = 'rgba(120, 240, 191, 0.5)';
-        ctx.lineWidth = 1;
-        this.drawRoundedRect(ctx, 8.5, y + 0.5, width - 17, rowRectHeight - 1, 12);
-        ctx.stroke();
-      }
-
-      ctx.fillStyle = '#d4ff75';
-      ctx.fillText(String(row.index).padStart(2, '0'), 20, y + (PATTERN_ROW_HEIGHT / 2));
-
-      row.channels.forEach((cell, channelIndex) => {
-        const cellX = layout.gridLeft + (channelIndex * (layout.channelWidth + PATTERN_GUTTER));
-        this.drawPatternCell(ctx, cellX, y, layout.channelWidth, row.index, channelIndex, cell, snapshot);
-      });
-    }
-  }
-
-  private drawPatternCell(
-    ctx: CanvasRenderingContext2D,
-    x: number,
-    y: number,
-    width: number,
-    rowIndex: number,
-    channelIndex: number,
-    cell: PatternCell,
-    snapshot: TrackerSnapshot,
-  ): void {
-    const selected = rowIndex === snapshot.cursor.row && channelIndex === snapshot.cursor.channel;
-    const note = formatCellNote(cell);
-    const sample = formatCellSample(cell);
-    const effect = formatCellEffect(cell);
-    const param = formatCellParam(cell);
-    const fieldRects = this.getPatternFieldRects(x, width);
-
-    if (selected) {
-      ctx.fillStyle = 'rgba(34, 54, 40, 0.95)';
-      this.drawRoundedRect(ctx, x, y + 2, width, PATTERN_ROW_HEIGHT - 6, 10);
-      ctx.fill();
-    }
-
-    if (selected && snapshot.cursor.field === 'note') {
-      this.drawCursorFrame(ctx, fieldRects.note.x, y + 4, fieldRects.note.width, PATTERN_ROW_HEIGHT - 10);
-      ctx.fillStyle = '#08110a';
-    } else {
-      ctx.fillStyle = '#eff8e7';
-    }
-    ctx.fillText(note, fieldRects.note.x + 2, y + (PATTERN_ROW_HEIGHT / 2));
-    ctx.fillStyle = '#eff8e7';
-
-    this.drawPatternDigit(ctx, fieldRects.sampleHigh, sample[0], selected && snapshot.cursor.field === 'sampleHigh', y);
-    this.drawPatternDigit(ctx, fieldRects.sampleLow, sample[1], selected && snapshot.cursor.field === 'sampleLow', y);
-    this.drawPatternDigit(ctx, fieldRects.effect, effect, selected && snapshot.cursor.field === 'effect', y, true);
-    this.drawPatternDigit(ctx, fieldRects.paramHigh, param[0], selected && snapshot.cursor.field === 'paramHigh', y);
-    this.drawPatternDigit(ctx, fieldRects.paramLow, param[1], selected && snapshot.cursor.field === 'paramLow', y);
-  }
-
-  private drawPatternDigit(
-    ctx: CanvasRenderingContext2D,
-    rect: { x: number; width: number },
-    value: string,
-    selected: boolean,
-    y: number,
-    effect = false,
-  ): void {
-    if (selected) {
-      this.drawCursorFrame(ctx, rect.x - 1, y + 4, rect.width + 2, PATTERN_ROW_HEIGHT - 10);
-      ctx.fillStyle = '#08110a';
-      ctx.fillText(value, rect.x + 3, y + (PATTERN_ROW_HEIGHT / 2));
-      ctx.fillStyle = '#eff8e7';
-      return;
-    }
-
-    ctx.fillStyle = effect ? '#78f0bf' : '#eff8e7';
-    ctx.fillText(value, rect.x + 3, y + (PATTERN_ROW_HEIGHT / 2));
-    ctx.fillStyle = '#eff8e7';
-  }
-
-  private drawCursorFrame(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number): void {
-    ctx.fillStyle = 'rgba(120, 240, 191, 0.96)';
-    this.drawRoundedRect(ctx, x, y, width, height, 6);
-    ctx.fill();
+    drawModernPatternCanvas({
+      canvas: this.patternCanvas,
+      snapshot,
+      hostWidth: host.clientWidth || host.getBoundingClientRect().width || 960,
+      visibleRowCount: MODERN_VISIBLE_PATTERN_ROWS,
+      rowHeight: PATTERN_ROW_HEIGHT,
+      gutter: PATTERN_GUTTER,
+      rowIndexWidth: PATTERN_ROW_INDEX_WIDTH,
+      minChannelWidth: PATTERN_MIN_CHANNEL_WIDTH,
+      drawRoundedRect: (ctx, x, y, width, height, radius) => this.drawRoundedRect(ctx, x, y, width, height, radius),
+    });
   }
 
   private drawRoundedRect(
@@ -1700,36 +783,15 @@ export class TrackerApplication {
   }
 
   private getPatternViewportStartRow(snapshot: TrackerSnapshot): number {
-    const anchorOffset = Math.floor(MODERN_VISIBLE_PATTERN_ROWS / 2);
-    const anchorRow = snapshot.transport.playing ? snapshot.transport.row : snapshot.cursor.row;
-    return anchorRow - anchorOffset;
+    return getModernPatternViewportStartRow(snapshot, MODERN_VISIBLE_PATTERN_ROWS);
   }
 
   private getPatternCanvasLayout(width: number): { gridLeft: number; channelWidth: number } {
-    const totalGap = PATTERN_GUTTER * 3;
-    const available = width - 16 - PATTERN_ROW_INDEX_WIDTH - totalGap;
-    const channelWidth = Math.max(PATTERN_MIN_CHANNEL_WIDTH, Math.floor(available / 4));
-    return {
-      gridLeft: PATTERN_ROW_INDEX_WIDTH,
-      channelWidth,
-    };
+    return getModernPatternCanvasLayout(width, PATTERN_ROW_INDEX_WIDTH, PATTERN_GUTTER, PATTERN_MIN_CHANNEL_WIDTH);
   }
 
   private getPatternFieldRects(x: number, width: number): Record<CursorField, { x: number; width: number }> {
-    const noteWidth = Math.min(48, Math.max(38, Math.floor(width * 0.28)));
-    const digitWidth = Math.min(16, Math.max(12, Math.floor((width - noteWidth - 20) / 5)));
-    const sampleStart = x + noteWidth + 10;
-    const effectStart = sampleStart + (digitWidth * 2) + 6;
-    const paramStart = effectStart + digitWidth + 6;
-
-    return {
-      note: { x: x + 8, width: noteWidth - 4 },
-      sampleHigh: { x: sampleStart, width: digitWidth },
-      sampleLow: { x: sampleStart + digitWidth, width: digitWidth },
-      effect: { x: effectStart, width: digitWidth },
-      paramHigh: { x: paramStart, width: digitWidth },
-      paramLow: { x: paramStart + digitWidth, width: digitWidth },
-    };
+    return getModernPatternFieldRects(x, width);
   }
 
   private renderCenteredPatternRows(snapshot: TrackerSnapshot): string {
@@ -1753,8 +815,7 @@ export class TrackerApplication {
   }
 
   private renderPatternPaddingRow(channelCount: number): string {
-    const emptyCell = Array.from({ length: channelCount }, () => `<div class="pattern-cell pattern-cell--ghost" aria-hidden="true"><span class="pattern-cell-note">---</span><span class="pattern-cell-mod"><span class="pattern-cell-digit">0</span><span class="pattern-cell-digit">0</span><span class="pattern-cell-digit pattern-cell-digit--effect">0</span><span class="pattern-cell-digit">0</span><span class="pattern-cell-digit">0</span></span></div>`).join('');
-    return `<div class="pattern-row pattern-row--ghost" aria-hidden="true"><div class="pattern-row-index">..</div>${emptyCell}</div>`;
+    return renderModernPatternPaddingRow(channelCount);
   }
 
   private renderModernPatternRow(
@@ -1763,62 +824,19 @@ export class TrackerApplication {
     snapshot: TrackerSnapshot,
     centered: boolean,
   ): string {
-    const rowClasses = [
-      'pattern-row',
-      rowIndex === snapshot.transport.row ? 'is-playing' : '',
-      rowIndex === snapshot.cursor.row ? 'is-selected-row' : '',
-      centered ? 'is-centered-row' : '',
-    ].filter(Boolean).join(' ');
-
-    return `<div class="${rowClasses}"><div class="pattern-row-index">${String(rowIndex).padStart(2, '0')}</div>${cells.map((cell, channelIndex) => this.renderModernPatternCell(rowIndex, channelIndex, cell, snapshot)).join('')}</div>`;
-  }
-
-  private renderModernPatternCell(
-    rowIndex: number,
-    channelIndex: number,
-    cell: PatternCell,
-    snapshot: TrackerSnapshot,
-  ): string {
-    const selected = rowIndex === snapshot.cursor.row && channelIndex === snapshot.cursor.channel;
-    const sample = formatCellSample(cell);
-    const effect = formatCellEffect(cell);
-    const param = formatCellParam(cell);
-
-    return `<button class="pattern-cell${selected ? ' is-selected' : ''}" type="button" data-action="select-cell" data-row="${rowIndex}" data-channel="${channelIndex}" data-field="note"><span class="pattern-cell-note${selected && snapshot.cursor.field === 'note' ? ' is-cursor' : ''}" data-action="select-cell" data-row="${rowIndex}" data-channel="${channelIndex}" data-field="note">${escapeHtml(formatCellNote(cell))}</span><span class="pattern-cell-mod">${this.renderPatternDigit(rowIndex, channelIndex, 'sampleHigh', sample[0], snapshot)}${this.renderPatternDigit(rowIndex, channelIndex, 'sampleLow', sample[1], snapshot)}${this.renderPatternDigit(rowIndex, channelIndex, 'effect', effect, snapshot, true)}${this.renderPatternDigit(rowIndex, channelIndex, 'paramHigh', param[0], snapshot)}${this.renderPatternDigit(rowIndex, channelIndex, 'paramLow', param[1], snapshot)}</span></button>`;
-  }
-
-  private renderPatternDigit(
-    rowIndex: number,
-    channelIndex: number,
-    field: CursorField,
-    digit: string,
-    snapshot: TrackerSnapshot,
-    effect = false,
-  ): string {
-    const selected = rowIndex === snapshot.cursor.row && channelIndex === snapshot.cursor.channel && snapshot.cursor.field === field;
-    return `<span class="pattern-cell-digit${effect ? ' pattern-cell-digit--effect' : ''}${selected ? ' is-cursor' : ''}" data-action="select-cell" data-row="${rowIndex}" data-channel="${channelIndex}" data-field="${field}">${escapeHtml(digit)}</span>`;
+    return renderModernPatternRowMarkup(rowIndex, cells, snapshot, centered);
   }
 
   private getSampleCardLabel(sample: SampleSlot): string {
-    const trimmedName = sample.name.trim();
-    if (trimmedName.length > 0) {
-      return trimmedName;
-    }
-
-    return sample.length > 0 ? '' : 'Empty';
+    return getModernSampleCardLabel(sample);
   }
 
   private getSelectedSampleHeading(sample: SampleSlot): string {
-    const trimmedName = sample.name.trim();
-    if (trimmedName.length > 0) {
-      return trimmedName;
-    }
-
-    return sample.length > 0 ? `Sample ${String(sample.index + 1).padStart(2, '0')}` : 'Empty';
+    return getModernSelectedSampleHeading(sample);
   }
 
   private getSamplePageCount(snapshot: TrackerSnapshot): number {
-    return Math.max(1, Math.ceil(snapshot.samples.length / SAMPLE_PAGE_SIZE));
+    return getModernSamplePageCount(snapshot.samples.length, SAMPLE_PAGE_SIZE);
   }
 
   private resolveSamplePage(snapshot: TrackerSnapshot): number {
@@ -1835,25 +853,11 @@ export class TrackerApplication {
   }
 
   private getSamplePanelKey(snapshot: TrackerSnapshot, samplePage: number): string {
-    const start = samplePage * SAMPLE_PAGE_SIZE;
-    const visible = snapshot.samples
-      .slice(start, start + SAMPLE_PAGE_SIZE)
-      .map((sample) => `${sample.index}:${sample.name}:${sample.length}`)
-      .join('|');
-    const selected = snapshot.samples[snapshot.selectedSample];
-    const selectedKey = selected
-      ? `${selected.index}:${selected.name}:${selected.length}:${selected.volume}:${selected.fineTune}:${selected.loopStart}:${selected.loopLength}`
-      : 'none';
-
-    return `${samplePage}:${snapshot.selectedSample}:${visible}:${selectedKey}`;
+    return getModernSamplePanelKey(snapshot, samplePage, SAMPLE_PAGE_SIZE);
   }
 
   private renderSampleBank(snapshot: TrackerSnapshot, samplePage: number): string {
-    const start = samplePage * SAMPLE_PAGE_SIZE;
-    return snapshot.samples
-      .slice(start, start + SAMPLE_PAGE_SIZE)
-      .map((sample) => this.renderSampleChip(sample, snapshot.selectedSample))
-      .join('');
+    return renderModernSampleBank(snapshot, samplePage, SAMPLE_PAGE_SIZE);
   }
 
   private getSampleEditorZoomAnchor(): number {
@@ -1869,173 +873,31 @@ export class TrackerApplication {
     return Math.round(view.start + (view.length / 2));
   }
 
-  private renderSampleWaveform(sample: SampleSlot): string {
-    const values = sample.preview && sample.preview.length > 0
-      ? sample.preview
-      : Array.from({ length: 48 }, () => 0);
-
-    const width = 240;
-    const height = 72;
-    const centerY = height / 2;
-    const stepX = values.length > 1 ? width / (values.length - 1) : width;
-    const linePoints = values
-      .map((value, index) => {
-        const x = (index * stepX).toFixed(2);
-        const y = (centerY - ((value / 128) * (height * 0.3))).toFixed(2);
-        return `${x},${y}`;
-      })
-      .join(' ');
-    const areaPath = values
-      .map((value, index) => {
-        const x = (index * stepX).toFixed(2);
-        const y = (centerY - ((value / 128) * (height * 0.3))).toFixed(2);
-        return `${index === 0 ? 'M' : 'L'} ${x} ${y}`;
-      })
-      .join(' ') + ` L ${width} ${centerY.toFixed(2)} L 0 ${centerY.toFixed(2)} Z`;
-
-    return `
-      <svg class="sample-chip__wave" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">
-        <defs>
-          <linearGradient id="sample-wave-fill-${sample.index}" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stop-color="rgba(212,255,117,0.03)" />
-            <stop offset="55%" stop-color="rgba(120,240,191,0.08)" />
-            <stop offset="100%" stop-color="rgba(138,199,255,0.03)" />
-          </linearGradient>
-          <linearGradient id="sample-wave-stroke-${sample.index}" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stop-color="rgba(212,255,117,0.34)" />
-            <stop offset="55%" stop-color="rgba(239,248,231,0.52)" />
-            <stop offset="100%" stop-color="rgba(138,199,255,0.3)" />
-          </linearGradient>
-        </defs>
-        <path d="${areaPath}" fill="url(#sample-wave-fill-${sample.index})" />
-        <polyline points="${linePoints}" fill="none" stroke="url(#sample-wave-stroke-${sample.index})" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round" />
-      </svg>
-    `;
-  }
-
-  private renderSampleChip(sample: SampleSlot, selectedSample: number): string {
-    return `
-      <button class="sample-chip${sample.index === selectedSample ? ' is-selected' : ''}" type="button" data-action="select-sample" data-sample="${sample.index}">
-        ${this.renderSampleWaveform(sample)}
-        <span class="sample-chip__index">${String(sample.index + 1).padStart(2, '0')}</span>
-        <strong class="sample-chip__name">${escapeHtml(this.getSampleCardLabel(sample))}</strong>
-      </button>
-    `;
-  }
-
   private renderSelectedSamplePanel(sample: SampleSlot, snapshot: TrackerSnapshot): string {
-    return `
-      <section class="sample-detail-panel">
-        <div class="sample-detail-head">
-          <div>
-            <p class="metric-label">Sample ${String(sample.index + 1).padStart(2, '0')}</p>
-            <strong class="sample-detail-title" data-role="selected-sample-title">${escapeHtml(this.getSelectedSampleHeading(sample))}</strong>
-          </div>
-          <div class="sample-detail-actions">
-            <button type="button" class="toolbar-button toolbar-button--primary" data-role="sample-preview-toggle" data-action="${this.samplePreviewPlaying ? 'sample-preview-stop' : 'sample-preview-play'}" ${sample.length > 0 ? '' : 'disabled'}>${iconMarkup(this.samplePreviewPlaying ? Square : Play)}<span>${this.samplePreviewPlaying ? 'Stop' : 'Play'}</span></button>
-            <button type="button" class="toolbar-button" data-action="sample-editor-open">${iconMarkup(PencilLine)}<span>Edit</span></button>
-          </div>
-        </div>
-        <div class="sample-preview-host" data-role="sample-preview-host"></div>
-        <p class="hint" data-role="selected-sample-hint">${escapeHtml(formatSampleLength(sample))}</p>
-      </section>
-    `;
+    void snapshot;
+    return renderModernSelectedSamplePanel({
+      sample,
+      samplePreviewPlaying: this.samplePreviewPlaying,
+      playIconHtml: iconMarkup(Play),
+      stopIconHtml: iconMarkup(Square),
+      editIconHtml: iconMarkup(PencilLine),
+    });
   }
 
   private renderSampleEditorPanel(snapshot: TrackerSnapshot): string {
-    const sample = snapshot.samples[snapshot.selectedSample];
-    const editable = this.canEditSnapshot(snapshot);
-    const view = this.getSampleEditorView(snapshot);
-    const loopEnabled = sample.loopLength > 2 && sample.length > 2;
-    const loopEnd = sample.loopStart + sample.loopLength;
-    const showScrollbar = sample.length > 0 && view.length > 0 && view.length < sample.length;
-    const scrollMax = Math.max(0, sample.length - view.length);
-    return `
-      <article class="panel sample-editor-panel editor-panel-shell">
-        <div class="panel-head compact sample-editor-head">
-          <div>
-            <p class="panel-label">Sample editor</p>
-            <h2 class="panel-title--subtle">Sample ${String(sample.index + 1).padStart(2, '0')} ${escapeHtml(this.getSelectedSampleHeading(sample))}</h2>
-          </div>
-          <div class="sample-editor-toolbar">
-            <button type="button" class="toolbar-button" data-action="sample-editor-show-all" ${sample.length > 0 ? '' : 'disabled'}>Show all</button>
-            <button type="button" class="toolbar-button" data-action="sample-editor-show-selection" ${(sample.length > 0 && snapshot.sampleEditor.selectionStart !== null) ? '' : 'disabled'}>Show selection</button>
-            <button type="button" class="toolbar-button toolbar-button--primary" data-role="sample-editor-preview-toggle" data-action="${this.samplePreviewPlaying ? 'sample-editor-stop' : 'sample-editor-preview'}" ${sample.length > 0 ? '' : 'disabled'}>${iconMarkup(this.samplePreviewPlaying ? Square : Play)}<span>${this.samplePreviewPlaying ? 'Stop' : 'Play'}</span></button>
-            <button type="button" class="toolbar-button" data-action="sample-editor-crop" ${(editable && snapshot.sampleEditor.selectionStart !== null) ? '' : 'disabled'}>Crop</button>
-            <button type="button" class="toolbar-button" data-action="sample-editor-cut" ${(editable && snapshot.sampleEditor.selectionStart !== null) ? '' : 'disabled'}>Cut</button>
-            <button type="button" class="toolbar-button" data-action="sample-editor-close">Back to pattern</button>
-          </div>
-        </div>
-        <div class="field-row field-row--sample-detail">
-          <label class="field">
-            <span>Name</span>
-            <input data-input="sample-name" value="${escapeHtml(sample.name)}" maxlength="22" ${editable ? '' : 'disabled'} />
-          </label>
-          <label class="field">
-            <span>Volume</span>
-            <input data-input="sample-volume" type="number" min="0" max="64" value="${sample.volume}" ${editable ? '' : 'disabled'} />
-          </label>
-          <label class="field">
-            <span>Fine tune</span>
-            <input data-input="sample-finetune" type="number" min="-8" max="7" value="${sample.fineTune}" ${editable ? '' : 'disabled'} />
-          </label>
-        </div>
-        <div class="field-row field-row--sample-loop">
-          <label class="field field--toggle">
-            <span>Loop</span>
-            <span class="toggle-control">
-              <input data-input="sample-loop-enabled" type="checkbox" ${loopEnabled ? 'checked' : ''} ${editable ? '' : 'disabled'} />
-              <span>Enabled</span>
-            </span>
-          </label>
-          <label class="field">
-            <span>Loop start</span>
-            <input data-input="sample-loop-start" type="number" min="0" max="${Math.max(0, sample.length - 2)}" value="${sample.loopStart}" ${(editable && loopEnabled) ? '' : 'disabled'} />
-          </label>
-          <label class="field">
-            <span>Loop end</span>
-            <input data-input="sample-loop-end" type="number" min="2" max="${sample.length}" value="${loopEnd}" ${(editable && loopEnabled) ? '' : 'disabled'} />
-          </label>
-        </div>
-        <div class="sample-editor-meta">
-          <span class="panel-title--subtle" data-role="sample-editor-visible">Visible ${view.start} - ${view.end}</span>
-          <span class="panel-title--subtle" data-role="sample-editor-loop">Loop ${sample.loopStart} - ${sample.loopStart + sample.loopLength}</span>
-        </div>
-        <div class="sample-editor-host" data-role="sample-editor-host"></div>
-        <div class="sample-editor-scrollbar-wrap${showScrollbar ? '' : ' is-hidden'}">
-          <input
-            class="sample-editor-scrollbar"
-            data-input="sample-editor-scroll"
-            type="range"
-            min="0"
-            max="${scrollMax}"
-            step="1"
-            value="${clamp(view.start, 0, scrollMax)}"
-            ${showScrollbar ? '' : 'disabled'}
-          />
-        </div>
-      </article>
-    `;
+    return renderModernSampleEditorPanel({
+      snapshot,
+      editable: this.canEditSnapshot(snapshot),
+      samplePreviewPlaying: this.samplePreviewPlaying,
+      selectedSampleHeading: this.getSelectedSampleHeading(snapshot.samples[snapshot.selectedSample]),
+      view: this.getSampleEditorView(snapshot),
+      playIconHtml: iconMarkup(Play),
+      stopIconHtml: iconMarkup(Square),
+    });
   }
 
   private renderClassicDebug(): string {
-    if (this.viewMode !== 'classic' || !SHOW_CLASSIC_DEBUG) {
-      return '';
-    }
-
-    return `
-      <div class="classic-debug">
-        <div><span>DOM mouse</span><strong data-debug-field="dom-mouse">n/a</strong></div>
-        <div><span>DOM state</span><strong data-debug-field="dom-state">n/a</strong></div>
-        <div><span>Mouse abs</span><strong data-debug-field="mouse-abs">n/a</strong></div>
-        <div><span>Mouse raw</span><strong data-debug-field="mouse-raw">n/a</strong></div>
-        <div><span>Mouse pt2</span><strong data-debug-field="mouse-pt2">n/a</strong></div>
-        <div><span>Buttons</span><strong data-debug-field="mouse-buttons">n/a</strong></div>
-        <div><span>Canvas CSS</span><strong data-debug-field="canvas-css">n/a</strong></div>
-        <div><span>Render</span><strong data-debug-field="video-render">n/a</strong></div>
-        <div><span>Scale</span><strong data-debug-field="video-scale">n/a</strong></div>
-      </div>
-    `;
+    return renderModernClassicDebug(this.viewMode === 'classic' && SHOW_CLASSIC_DEBUG);
   }
 
   private async handleClick(event: Event): Promise<void> {
@@ -2043,242 +905,34 @@ export class TrackerApplication {
     if (!target || !this.engine || !this.snapshot) {
       return;
     }
-
-    switch (target.dataset.action) {
-      case 'new-song':
-        this.clearSampleEditorViewOverride();
-        this.engine.dispatch({ type: 'song/new' });
-        return;
-      case 'load-module':
-        this.moduleInput.click();
-        return;
-      case 'save-module':
-      {
-        const file = await this.engine.saveModule();
-        triggerDownload(file.filename, file.mimeType, file.bytes);
-        return;
-      }
-      case 'toggle-play':
-        this.engine.setTransport({ type: 'transport/toggle' });
-        return;
-      case 'stop':
-        this.engine.setTransport({ type: 'transport/stop' });
-        return;
-      case 'toggle-track-mute':
-        this.engine.dispatch({
-          type: 'channel/toggle-mute',
-          channel: Number(target.dataset.channel),
-        });
-        return;
-      case 'song-position-down':
-        if (this.canEditSnapshot(this.snapshot)) {
-          this.engine.dispatch({
-            type: 'song/set-position',
-            position: clamp(this.snapshot.transport.position - 1, 0, this.snapshot.song.length - 1),
-          });
-        }
-        return;
-      case 'song-position-up':
-        if (this.canEditSnapshot(this.snapshot)) {
-          this.engine.dispatch({
-            type: 'song/set-position',
-            position: clamp(this.snapshot.transport.position + 1, 0, this.snapshot.song.length - 1),
-          });
-        }
-        return;
-      case 'song-pattern-down':
-        if (this.canEditSnapshot(this.snapshot)) {
-          this.engine.dispatch({
-            type: 'song/set-pattern',
-            pattern: clamp(this.snapshot.pattern.index - 1, 0, 99),
-          });
-        }
-        return;
-      case 'song-pattern-up':
-        if (this.canEditSnapshot(this.snapshot)) {
-          this.engine.dispatch({
-            type: 'song/set-pattern',
-            pattern: clamp(this.snapshot.pattern.index + 1, 0, 99),
-          });
-        }
-        return;
-      case 'song-length-down':
-        if (this.canEditSnapshot(this.snapshot)) {
-          this.engine.dispatch({ type: 'song/adjust-length', delta: -1 });
-        }
-        return;
-      case 'song-length-up':
-        if (this.canEditSnapshot(this.snapshot)) {
-          this.engine.dispatch({ type: 'song/adjust-length', delta: 1 });
-        }
-        return;
-      case 'song-bpm-down':
-        if (this.canEditSnapshot(this.snapshot)) {
-          this.engine.dispatch({
-            type: 'song/set-bpm',
-            bpm: clamp(this.snapshot.transport.bpm - 1, 32, 255),
-          });
-        }
-        return;
-      case 'song-bpm-up':
-        if (this.canEditSnapshot(this.snapshot)) {
-          this.engine.dispatch({
-            type: 'song/set-bpm',
-            bpm: clamp(this.snapshot.transport.bpm + 1, 32, 255),
-          });
-        }
-        return;
-      case 'view-modern':
-        this.releaseClassicKeys();
-        this.viewMode = 'modern';
-        this.render();
-        return;
-      case 'view-classic':
-        this.releaseClassicKeys();
-        this.viewMode = 'classic';
-        this.render();
-        return;
-      case 'octave-down':
-        this.keyboardOctave = clamp(this.keyboardOctave - 1, MIN_OCTAVE, MAX_OCTAVE);
-        this.updateModernLiveRegions(this.snapshot);
-        return;
-      case 'octave-up':
-        this.keyboardOctave = clamp(this.keyboardOctave + 1, MIN_OCTAVE, MAX_OCTAVE);
-        this.updateModernLiveRegions(this.snapshot);
-        return;
-      case 'visualization-prev':
-        this.shiftVisualization(-1);
-        return;
-      case 'visualization-next':
-        this.shiftVisualization(1);
-        return;
-      case 'sample-page-prev':
-        this.samplePage = clamp(this.resolveSamplePage(this.snapshot) - 1, 0, this.getSamplePageCount(this.snapshot) - 1);
-        this.render();
-        return;
-      case 'sample-page-next':
-        this.samplePage = clamp(this.resolveSamplePage(this.snapshot) + 1, 0, this.getSamplePageCount(this.snapshot) - 1);
-        this.render();
-        return;
-      case 'sample-preview-play':
-        this.engine.dispatch({ type: 'sample-editor/play', mode: 'sample' });
-        this.samplePreviewPlaying = true;
-        this.updateModernLiveRegions(this.snapshot);
-        return;
-      case 'sample-preview-stop':
-        this.engine.setTransport({ type: 'transport/stop' });
-        this.samplePreviewPlaying = false;
-        this.updateModernLiveRegions(this.snapshot);
-        return;
-      case 'sample-editor-open':
-        this.clearSampleEditorViewOverride();
-        this.engine.dispatch({ type: 'sample-editor/open', sample: this.snapshot.selectedSample });
-        this.snapshot = this.engine.getSnapshot();
-        this.render();
-        return;
-      case 'sample-editor-close':
-        this.clearSampleEditorViewOverride();
-        this.engine.dispatch({ type: 'sample-editor/close' });
-        this.snapshot = this.engine.getSnapshot();
-        this.render();
-        return;
-      case 'sample-editor-show-all':
-        this.clearSampleEditorViewOverride();
-        this.engine.dispatch({ type: 'sample-editor/show-all' });
-        this.snapshot = this.engine.getSnapshot();
-        this.updateModernLiveRegions(this.snapshot);
-        return;
-      case 'sample-editor-show-selection':
-        if (this.snapshot.sampleEditor.selectionStart !== null && this.snapshot.sampleEditor.selectionEnd !== null) {
-          this.sampleEditorViewOverride = {
-            sample: this.snapshot.selectedSample,
-            start: this.snapshot.sampleEditor.selectionStart,
-            length: Math.max(2, this.snapshot.sampleEditor.selectionEnd - this.snapshot.sampleEditor.selectionStart),
-          };
-          this.updateModernLiveRegions(this.snapshot);
-        }
-        return;
-      case 'sample-editor-zoom-in': {
-        this.clearSampleEditorViewOverride();
-        const anchor = this.getSampleEditorZoomAnchor();
-        this.engine.dispatch({ type: 'sample-editor/zoom-in', anchor });
-        this.snapshot = this.engine.getSnapshot();
-        this.updateModernLiveRegions(this.snapshot);
-        return;
-      }
-      case 'sample-editor-zoom-out': {
-        this.clearSampleEditorViewOverride();
-        const anchor = this.getSampleEditorZoomAnchor();
-        this.engine.dispatch({ type: 'sample-editor/zoom-out', anchor });
-        this.snapshot = this.engine.getSnapshot();
-        this.updateModernLiveRegions(this.snapshot);
-        return;
-      }
-      case 'sample-editor-preview': {
-        const mode = this.snapshot.sampleEditor.selectionStart !== null ? 'selection' : 'view';
-        if (mode === 'view' && this.sampleEditorViewOverride) {
-          const view = this.getSampleEditorView(this.snapshot);
-          this.engine.dispatch({ type: 'sample-editor/set-view', start: view.start, length: view.length });
-        }
-        this.engine.dispatch({ type: 'sample-editor/play', mode });
-        this.samplePreviewPlaying = true;
-        this.updateModernLiveRegions(this.snapshot);
-        return;
-      }
-      case 'sample-editor-stop':
-        this.engine.setTransport({ type: 'transport/stop' });
-        this.samplePreviewPlaying = false;
-        this.updateModernLiveRegions(this.snapshot);
-        return;
-      case 'sample-editor-crop':
-        if (!this.canEditSnapshot(this.snapshot)) {
-          return;
-        }
-        this.clearSampleEditorViewOverride();
-        this.engine.dispatch({ type: 'sample-editor/crop' });
-        this.snapshot = this.engine.getSnapshot();
-        this.refreshSelectedSampleWaveform(this.snapshot, true);
-        this.updateModernLiveRegions(this.snapshot);
-        return;
-      case 'sample-editor-cut':
-        if (!this.canEditSnapshot(this.snapshot)) {
-          return;
-        }
-        this.clearSampleEditorViewOverride();
-        this.engine.dispatch({ type: 'sample-editor/cut' });
-        this.snapshot = this.engine.getSnapshot();
-        this.refreshSelectedSampleWaveform(this.snapshot, true);
-        this.updateModernLiveRegions(this.snapshot);
-        return;
-      case 'select-cell':
-        this.engine.dispatch({
-          type: 'cursor/set',
-          row: Number(target.dataset.row),
-          channel: Number(target.dataset.channel),
-          field: (target.dataset.field as CursorField | undefined) ?? 'note',
-        });
-        return;
-      case 'select-sample':
-        this.clearSampleEditorViewOverride();
-        this.lastSelectedSample = Number(target.dataset.sample);
-        this.samplePage = clamp(Math.floor(this.lastSelectedSample / SAMPLE_PAGE_SIZE), 0, this.getSamplePageCount(this.snapshot) - 1);
-        this.engine.dispatch({
-          type: 'sample/select',
-          sample: this.lastSelectedSample,
-        });
-        this.snapshot = this.engine.getSnapshot();
-        this.refreshSelectedSampleWaveform(this.snapshot, true);
-        if (this.snapshot.samples[this.lastSelectedSample]?.length === 0) {
-          this.pendingSampleImportSlot = this.lastSelectedSample;
-          this.render();
-          this.sampleInput.click();
-          return;
-        }
-        this.render();
-        return;
-      default:
-        return;
-    }
+    await handleModernClickAction({
+      target,
+      engine: this.engine,
+      snapshot: this.snapshot,
+      moduleInput: this.moduleInput,
+      sampleInput: this.sampleInput,
+      keyboardOctave: this.keyboardOctave,
+      sampleEditorViewOverride: this.sampleEditorViewOverride,
+      canEditSnapshot: (snapshot) => this.canEditSnapshot(snapshot),
+      clearSampleEditorViewOverride: () => this.clearSampleEditorViewOverride(),
+      getSampleEditorView: (snapshot) => this.getSampleEditorView(snapshot),
+      getSampleEditorZoomAnchor: () => this.getSampleEditorZoomAnchor(),
+      getSamplePageCount: (snapshot) => this.getSamplePageCount(snapshot),
+      refreshSelectedSampleWaveform: (snapshot, force) => this.refreshSelectedSampleWaveform(snapshot, force),
+      releaseClassicKeys: () => this.releaseClassicKeys(),
+      render: () => this.render(),
+      resolveSamplePage: (snapshot) => this.resolveSamplePage(snapshot),
+      setKeyboardOctave: (value) => { this.keyboardOctave = value; },
+      setLastSelectedSample: (value) => { this.lastSelectedSample = value; },
+      setPendingSampleImportSlot: (value) => { this.pendingSampleImportSlot = value; },
+      setSampleEditorViewOverride: (value) => { this.sampleEditorViewOverride = value; },
+      setSamplePage: (value) => { this.samplePage = value; },
+      setSamplePreviewPlaying: (value) => { this.samplePreviewPlaying = value; },
+      setSnapshot: (snapshot) => { this.snapshot = snapshot; },
+      setViewMode: (mode) => { this.viewMode = mode; },
+      shiftVisualization: (direction) => this.shiftVisualization(direction),
+      updateModernLiveRegions: (snapshot) => this.updateModernLiveRegions(snapshot),
+    });
   }
 
   private async handleChange(event: Event): Promise<void> {
@@ -2287,27 +941,22 @@ export class TrackerApplication {
     }
 
     if (event.target === this.moduleInput) {
-      const [file] = Array.from(this.moduleInput.files ?? []);
-      if (file) {
-        await this.engine.loadModule(new Uint8Array(await file.arrayBuffer()), file.name);
-      }
-      this.moduleInput.value = '';
+      await loadModuleFromInput(this.engine, this.moduleInput);
       return;
     }
 
     if (event.target === this.sampleInput) {
-      const [file] = Array.from(this.sampleInput.files ?? []);
-      if (file) {
-        if (this.pendingSampleImportSlot !== null) {
-          this.engine.dispatch({ type: 'sample/select', sample: this.pendingSampleImportSlot });
-        }
-        await this.engine.loadSample(new Uint8Array(await file.arrayBuffer()), file.name);
-        this.snapshot = this.engine.getSnapshot();
-        this.refreshSelectedSampleWaveform(this.snapshot, true);
-        this.render();
-      }
+      await loadSampleFromInput({
+        engine: this.engine,
+        input: this.sampleInput,
+        pendingSampleImportSlot: this.pendingSampleImportSlot,
+        onLoaded: (snapshot) => {
+          this.snapshot = snapshot;
+          this.refreshSelectedSampleWaveform(snapshot, true);
+          this.render();
+        },
+      });
       this.pendingSampleImportSlot = null;
-      this.sampleInput.value = '';
       return;
     }
 
@@ -2319,64 +968,17 @@ export class TrackerApplication {
       return;
     }
 
-    const inputKey = event.target.dataset.input;
-    if (!inputKey) {
-      return;
-    }
-
-    const selectedSample = this.snapshot.selectedSample;
-    const canEdit = this.canEditSnapshot(this.snapshot);
-
-    switch (inputKey) {
-      case 'sample-name':
-        if (!canEdit) {
-          return;
-        }
-        this.engine.dispatch({ type: 'sample/update', sample: selectedSample, patch: { name: event.target.value } });
-        break;
-      case 'sample-volume':
-        if (!canEdit) {
-          return;
-        }
-        this.engine.dispatch({ type: 'sample/update', sample: selectedSample, patch: { volume: clamp(Number(event.target.value), 0, 64) } });
-        break;
-      case 'sample-finetune':
-        if (!canEdit) {
-          return;
-        }
-        this.engine.dispatch({ type: 'sample/update', sample: selectedSample, patch: { fineTune: clamp(Number(event.target.value), -8, 7) } });
-        break;
-      case 'sample-loop-start':
-        if (!canEdit) {
-          return;
-        }
-        this.engine.dispatch({ type: 'sample-editor/set-loop', start: Math.max(0, Number(event.target.value)) });
-        break;
-      case 'sample-loop-end':
-        if (!canEdit) {
-          return;
-        }
-        this.engine.dispatch({ type: 'sample-editor/set-loop', end: Math.max(2, Number(event.target.value)) });
-        break;
-      case 'sample-loop-enabled':
-        if (!canEdit) {
-          return;
-        }
-        this.engine.dispatch({ type: 'sample-editor/toggle-loop', enabled: event.target.checked });
-        break;
-      case 'sample-editor-scroll':
-        this.sampleEditorViewOverride = {
-          sample: this.snapshot.selectedSample,
-          start: Math.max(0, Number(event.target.value)),
-          length: this.getSampleEditorView(this.snapshot).length,
-        };
-        this.updateModernLiveRegions(this.snapshot);
-        return;
-    }
-
-    this.snapshot = this.engine.getSnapshot();
-    this.refreshSelectedSampleWaveform(this.snapshot, true);
-    this.updateModernLiveRegions(this.snapshot);
+    handleModernInputAction({
+      target: event.target,
+      engine: this.engine,
+      snapshot: this.snapshot,
+      canEditSnapshot: (snapshot) => this.canEditSnapshot(snapshot),
+      getSampleEditorView: (snapshot) => this.getSampleEditorView(snapshot),
+      refreshSelectedSampleWaveform: (snapshot, force) => this.refreshSelectedSampleWaveform(snapshot, force),
+      setSampleEditorViewOverride: (value) => { this.sampleEditorViewOverride = value; },
+      setSnapshot: (snapshot) => { this.snapshot = snapshot; },
+      updateModernLiveRegions: (snapshot) => this.updateModernLiveRegions(snapshot),
+    });
   }
 
   private handleKeyDown(event: KeyboardEvent): void {
@@ -2625,173 +1227,61 @@ export class TrackerApplication {
   }
 
   private updateTrackMuteButtons(snapshot: TrackerSnapshot): void {
-    for (let channel = 0; channel < 4; channel += 1) {
-      const muted = snapshot.editor.muted[channel] ?? false;
-      const button = this.root.querySelector<HTMLButtonElement>(`[data-role="track-mute-${channel}"]`);
-      if (button) {
-        button.classList.toggle('is-muted', muted);
-        button.setAttribute('aria-pressed', muted ? 'true' : 'false');
-        button.setAttribute('aria-label', `${muted ? 'Unmute' : 'Mute'} track ${channel + 1}`);
-        button.innerHTML = iconMarkup(muted ? VolumeX : Volume2);
-      }
-
-      const label = button?.closest('.track-label');
-      label?.classList.toggle('is-muted', muted);
-    }
+    updateModernTrackMuteButtons({
+      root: this.root,
+      snapshot,
+      renderMuteIcon: (muted) => iconMarkup(muted ? VolumeX : Volume2),
+    });
   }
 
   private updateSamplePanel(snapshot: TrackerSnapshot): void {
-    const selectedSample = snapshot.samples[snapshot.selectedSample];
-    const samplePage = this.resolveSamplePage(snapshot);
-    const pageCount = this.getSamplePageCount(snapshot);
-    const key = this.getSamplePanelKey(snapshot, samplePage);
-
-    this.setLiveText('sample-page-label', `Page ${samplePage + 1} / ${pageCount}`);
-
-    const prevButton = this.root.querySelector<HTMLButtonElement>('[data-action="sample-page-prev"]');
-    if (prevButton) {
-      prevButton.disabled = samplePage <= 0;
-    }
-
-    const nextButton = this.root.querySelector<HTMLButtonElement>('[data-action="sample-page-next"]');
-    if (nextButton) {
-      nextButton.disabled = samplePage >= pageCount - 1;
-    }
-
-    if (this.samplePanelKey === key) {
-      this.setLiveText('selected-sample-title', this.getSelectedSampleHeading(selectedSample));
-      this.setLiveText('selected-sample-hint', formatSampleLength(selectedSample));
-      return;
-    }
-
-    const bank = this.root.querySelector<HTMLElement>('[data-role="sample-bank"]');
-    if (bank) {
-      bank.innerHTML = this.renderSampleBank(snapshot, samplePage);
-    }
-
-    const detail = this.root.querySelector<HTMLElement>('[data-role="sample-detail-content"]');
-    if (detail) {
-      detail.innerHTML = this.renderSelectedSamplePanel(selectedSample, snapshot);
-      const previewHost = detail.querySelector<HTMLElement>('[data-role="sample-preview-host"]');
-      if (previewHost) {
-        previewHost.replaceChildren(this.samplePreviewCanvas);
-      }
-    }
-
-    this.samplePanelKey = key;
+    this.samplePanelKey = updateModernSamplePanel({
+      root: this.root,
+      snapshot,
+      samplePanelKey: this.samplePanelKey,
+      samplePreviewCanvas: this.samplePreviewCanvas,
+      formatSelectedSampleHint: (sample) => formatSampleLength(sample),
+      resolveSamplePage: (nextSnapshot) => this.resolveSamplePage(nextSnapshot),
+      getSamplePageCount: (nextSnapshot) => this.getSamplePageCount(nextSnapshot),
+      getSamplePanelKey: (nextSnapshot, samplePage) => this.getSamplePanelKey(nextSnapshot, samplePage),
+      getSelectedSampleHeading: (sample) => this.getSelectedSampleHeading(sample),
+      renderSampleBank: (nextSnapshot, samplePage) => this.renderSampleBank(nextSnapshot, samplePage),
+      renderSelectedSamplePanel: (sample, nextSnapshot) => this.renderSelectedSamplePanel(sample, nextSnapshot),
+    });
   }
 
   private setLiveText(role: string, value: string): void {
-    const element = this.root.querySelector<HTMLElement>(`[data-role="${role}"]`);
-    if (element) {
-      element.textContent = value;
-    }
+    setModernLiveText(this.root, role, value);
   }
 
   private handleModernHexEntry(event: KeyboardEvent): boolean {
-    if (!this.engine || !this.snapshot || !this.canEditSnapshot(this.snapshot)) {
+    if (!this.engine || !this.snapshot) {
       return false;
     }
-
-    const key = event.key.toUpperCase();
-    if (!/^[0-9A-F]$/.test(key)) {
-      return false;
-    }
-
-    const { field, row, channel } = this.snapshot.cursor;
-    if (field === 'note') {
-      return false;
-    }
-
-    const cell = this.snapshot.pattern.rows[row]?.channels[channel];
-    if (!cell) {
-      return false;
-    }
-
-    event.preventDefault();
-
-    switch (field) {
-      case 'sampleHigh':
-      case 'sampleLow': {
-        const current = formatCellSample(cell);
-        const nextDigits = field === 'sampleHigh' ? `${key}${current[1]}` : `${current[0]}${key}`;
-        const sampleNumber = Number.parseInt(nextDigits, 16);
-        this.applyCellPatch(row, channel, {
-          sample: sampleNumber <= 0 ? null : clamp(sampleNumber, 1, 31) - 1,
-        });
-        break;
-      }
-      case 'effect':
-        this.applyCellPatch(row, channel, { effect: key });
-        break;
-      case 'paramHigh':
-      case 'paramLow': {
-        const current = formatCellParam(cell);
-        const nextDigits = field === 'paramHigh' ? `${key}${current[1]}` : `${current[0]}${key}`;
-        this.applyCellPatch(row, channel, { param: nextDigits });
-        break;
-      }
-    }
-
-    const nextCursor = moveCursorHorizontally(this.snapshot.cursor, this.snapshot.pattern.rows[0]?.channels.length ?? 4, 1);
-    this.engine.dispatch({
-      type: 'cursor/set',
-      row,
-      channel: nextCursor.channel,
-      field: nextCursor.field,
-    });
-    return true;
+    return handleModernHexEntryInput(
+      event,
+      this.engine,
+      this.snapshot,
+      (snapshot) => this.canEditSnapshot(snapshot),
+      (row, channel, patch) => this.applyCellPatch(row, channel, patch),
+    );
   }
 
   private handlePatternCanvasPointer(event: MouseEvent): void {
     if (!this.engine || !this.snapshot || this.viewMode !== 'modern') {
       return;
     }
-
-    const rect = this.patternCanvas.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) {
-      return;
-    }
-
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
-    const rowTop = 10;
-    const rowIndexInView = Math.floor((y - rowTop) / PATTERN_ROW_HEIGHT);
-    if (rowIndexInView < 0 || rowIndexInView >= MODERN_VISIBLE_PATTERN_ROWS) {
-      return;
-    }
-
-    const row = this.getPatternViewportStartRow(this.snapshot) + rowIndexInView;
-    if (row < 0 || row >= this.snapshot.pattern.rows.length) {
-      return;
-    }
-
-    const layout = this.getPatternCanvasLayout(rect.width);
-    const channelStride = layout.channelWidth + PATTERN_GUTTER;
-    const localX = x - layout.gridLeft;
-    if (localX < 0) {
-      return;
-    }
-
-    const channel = Math.floor(localX / channelStride);
-    if (channel < 0 || channel >= 4) {
-      return;
-    }
-
-    const channelX = layout.gridLeft + (channel * channelStride);
-    const channelLocalX = x - channelX;
-    if (channelLocalX < 0 || channelLocalX > layout.channelWidth) {
-      return;
-    }
-
-    const fieldRects = this.getPatternFieldRects(channelX, layout.channelWidth);
-    const field = this.resolvePatternFieldFromPointer(x, fieldRects);
-
-    this.engine.dispatch({
-      type: 'cursor/set',
-      row,
-      channel,
-      field,
+    handleModernPatternCanvasPointer({
+      event,
+      engine: this.engine,
+      snapshot: this.snapshot,
+      canvas: this.patternCanvas,
+      visibleRowCount: MODERN_VISIBLE_PATTERN_ROWS,
+      rowHeight: PATTERN_ROW_HEIGHT,
+      gutter: PATTERN_GUTTER,
+      getPatternViewportStartRow: (snapshot) => this.getPatternViewportStartRow(snapshot),
+      getPatternCanvasLayout: (width) => this.getPatternCanvasLayout(width),
+      getPatternFieldRects: (x, width) => this.getPatternFieldRects(x, width),
     });
   }
 
@@ -2800,31 +1290,20 @@ export class TrackerApplication {
       return;
     }
 
-    const rect = this.sampleEditorCanvas.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) {
+    const nextPointer = beginSampleEditorPointer({
+      event,
+      snapshot: this.snapshot,
+      canvas: this.sampleEditorCanvas,
+      canEditSnapshot: (snapshot) => this.canEditSnapshot(snapshot),
+      getSampleEditorLayout: (width, height) => this.getSampleEditorLayout(width, height),
+      sampleEditorXToOffset: (clientX, snapshot) => this.sampleEditorXToOffset(clientX, snapshot),
+      sampleOffsetToEditorX: (offset, snapshot, layout) => this.sampleOffsetToEditorX(offset, snapshot, layout),
+    });
+    if (!nextPointer) {
       return;
     }
 
-    const layout = this.getSampleEditorLayout(rect.width, rect.height);
-    const localX = event.clientX - rect.left;
-    const localY = event.clientY - rect.top;
-    if (localX < layout.left || localX > layout.left + layout.width || localY < layout.top || localY > layout.top + layout.height) {
-      return;
-    }
-
-    const offset = this.sampleEditorXToOffset(event.clientX, this.snapshot);
-    const loopEnabled = this.snapshot.samples[this.snapshot.selectedSample].loopLength > 2 && this.snapshot.samples[this.snapshot.selectedSample].length > 2;
-    const loopStartX = this.sampleOffsetToEditorX(this.snapshot.sampleEditor.loopStart, this.snapshot, layout);
-    const loopEndX = this.sampleOffsetToEditorX(this.snapshot.sampleEditor.loopEnd, this.snapshot, layout);
-    const handleThreshold = 10;
-
-    if (loopEnabled && Math.abs(localX - loopStartX) <= handleThreshold) {
-      this.sampleEditorPointer = { mode: 'loop-start', active: true, anchor: offset, current: offset };
-    } else if (loopEnabled && Math.abs(localX - loopEndX) <= handleThreshold) {
-      this.sampleEditorPointer = { mode: 'loop-end', active: true, anchor: offset, current: offset };
-    } else {
-      this.sampleEditorPointer = { mode: 'select', active: true, anchor: offset, current: offset };
-    }
+    this.sampleEditorPointer = nextPointer;
 
     event.preventDefault();
     this.drawSampleEditor(this.snapshot);
@@ -2835,7 +1314,18 @@ export class TrackerApplication {
       return;
     }
 
-    this.sampleEditorPointer.current = this.sampleEditorXToOffset(event.clientX, this.snapshot);
+    const nextPointer = updateSampleEditorPointer(
+      event,
+      this.snapshot,
+      this.sampleEditorPointer,
+      (snapshot) => this.canEditSnapshot(snapshot),
+      (clientX, snapshot) => this.sampleEditorXToOffset(clientX, snapshot),
+    );
+    if (!nextPointer) {
+      return;
+    }
+
+    this.sampleEditorPointer = nextPointer;
     this.drawSampleEditor(this.snapshot);
   }
 
@@ -2852,29 +1342,17 @@ export class TrackerApplication {
       current: 0,
     };
 
-    if (pointer.mode === 'select') {
-      if (Math.abs(pointer.current - pointer.anchor) < 2) {
-        this.engine.dispatch({ type: 'sample-editor/set-selection', start: null, end: null });
-      } else {
-        this.engine.dispatch({
-          type: 'sample-editor/set-selection',
-          start: Math.min(pointer.anchor, pointer.current),
-          end: Math.max(pointer.anchor, pointer.current),
-        });
-      }
-    } else if (pointer.mode === 'loop-start') {
-      this.engine.dispatch({
-        type: 'sample-editor/set-loop',
-        start: Math.min(pointer.current, this.snapshot.sampleEditor.loopEnd - 2),
-      });
-    } else if (pointer.mode === 'loop-end') {
-      this.engine.dispatch({
-        type: 'sample-editor/set-loop',
-        end: Math.max(pointer.current, this.snapshot.sampleEditor.loopStart + 2),
-      });
+    const nextSnapshot = completeSampleEditorPointer(
+      this.engine,
+      this.snapshot,
+      pointer,
+      (snapshot) => this.canEditSnapshot(snapshot),
+    );
+    if (!nextSnapshot) {
+      return;
     }
 
-    this.snapshot = this.engine.getSnapshot();
+    this.snapshot = nextSnapshot;
     this.refreshSelectedSampleWaveform(this.snapshot, true);
     this.updateModernLiveRegions(this.snapshot);
   }
@@ -2884,14 +1362,13 @@ export class TrackerApplication {
       return;
     }
 
-    event.preventDefault();
     this.clearSampleEditorViewOverride();
-    const anchor = this.sampleEditorXToOffset(event.clientX, this.snapshot);
-    this.engine.dispatch({
-      type: event.deltaY < 0 ? 'sample-editor/zoom-in' : 'sample-editor/zoom-out',
-      anchor,
-    });
-    this.snapshot = this.engine.getSnapshot();
+    this.snapshot = zoomSampleEditorFromWheel(
+      event,
+      this.engine,
+      this.snapshot,
+      (clientX, snapshot) => this.sampleEditorXToOffset(clientX, snapshot),
+    );
     this.updateModernLiveRegions(this.snapshot);
   }
 
@@ -2899,22 +1376,11 @@ export class TrackerApplication {
     x: number,
     fieldRects: Record<CursorField, { x: number; width: number }>,
   ): CursorField {
-    for (const field of CURSOR_FIELDS) {
-      const rect = fieldRects[field];
-      if (x >= rect.x && x <= rect.x + rect.width) {
-        return field;
-      }
-    }
-
-    return 'note';
+    return resolveModernPatternFieldFromPointer(x, fieldRects);
   }
 
   private handleClassicCanvasPointer(event: MouseEvent): void {
-    const rect = this.config.canvas.getBoundingClientRect();
-    this.classicDomDebug.x = Math.round(event.clientX - rect.left);
-    this.classicDomDebug.y = Math.round(event.clientY - rect.top);
-    this.classicDomDebug.buttons = event.buttons;
-    this.classicDomDebug.events += 1;
+    updateClassicDomDebugPointer(this.classicDomDebug, this.config.canvas, event);
     this.updateClassicDebugPanel(this.snapshot);
   }
 
@@ -2922,45 +1388,19 @@ export class TrackerApplication {
     if (!this.engine || !this.snapshot || this.viewMode !== 'modern') {
       return;
     }
-
-    const rect = this.pianoCanvas.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) {
-      return;
-    }
-
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
-    const padding = 16;
-    const keyboardTop = 14;
-    const keyboardHeight = rect.height - 28;
-    const localX = x - padding;
-    const keys = buildPianoKeys(Math.max(1, rect.width - (padding * 2)));
-    const blackHeight = keyboardHeight * 0.66;
-
-    const blackKey = keys
-      .filter((key) => key.black)
-      .find((key) => localX >= key.x && localX <= key.x + key.width && y >= keyboardTop && y <= keyboardTop + blackHeight);
-    const whiteKey = keys
-      .filter((key) => !key.black)
-      .find((key) => localX >= key.x && localX <= key.x + key.width && y >= keyboardTop && y <= keyboardTop + keyboardHeight);
-    const targetKey = blackKey ?? whiteKey;
-
-    if (!targetKey || !this.canEditSnapshot(this.snapshot) || this.snapshot.cursor.field !== 'note') {
-      return;
-    }
-
-    event.preventDefault();
-    this.engine.dispatch({
-      type: 'pattern/set-cell',
-      row: this.snapshot.cursor.row,
-      channel: this.snapshot.cursor.channel,
-      patch: { note: targetKey.note },
+    handleModernPianoPointer({
+      event,
+      engine: this.engine,
+      snapshot: this.snapshot,
+      canvas: this.pianoCanvas,
+      canEditSnapshot: (snapshot) => this.canEditSnapshot(snapshot),
+      onGlow: (channel, absolute) => this.triggerPianoGlow(channel, absolute),
+      onActiveNote: (channel, absolute) => { this.activePianoNotes[channel] = absolute; },
+      onAfterCommit: (snapshot) => {
+        this.snapshot = snapshot;
+        this.drawPatternCanvas(snapshot);
+      },
     });
-    this.activePianoNotes[this.snapshot.cursor.channel] = targetKey.absolute;
-    this.triggerPianoGlow(this.snapshot.cursor.channel, targetKey.absolute);
-    this.engine.dispatch({ type: 'cursor/move', rowDelta: 1 });
-    this.snapshot = this.engine.getSnapshot();
-    this.drawPatternCanvas(this.snapshot);
   }
 
   private handleClassicCanvasPointerMove(event: MouseEvent): void {
@@ -2996,104 +1436,22 @@ export class TrackerApplication {
     if (!this.engine || isEditableTarget(event.target)) {
       return;
     }
-
-    const translation = translateClassicKeyboardEvent(event);
-    if (!translation) {
-      return;
-    }
-
-    event.preventDefault();
-    event.stopPropagation();
-
-    if (event.repeat || this.classicPressedKeys.has(event.code)) {
-      return;
-    }
-
-    this.classicPressedKeys.set(event.code, translation);
-    this.engine.forwardClassicKeyDown(
-      translation.scancode,
-      translation.keycode,
-      translation.shift,
-      translation.ctrl,
-      translation.alt,
-      translation.meta,
-    );
-
-    if (translation.text) {
-      this.engine.forwardClassicTextInput(translation.text);
-    }
+    handleModernClassicKeyDown(event, this.engine, this.classicPressedKeys);
   }
 
   private releaseClassicKeys(): void {
-    if (!this.engine || this.classicPressedKeys.size === 0) {
-      this.classicPressedKeys.clear();
-      return;
-    }
-
-    for (const translation of this.classicPressedKeys.values()) {
-      this.engine.forwardClassicKeyUp(
-        translation.scancode,
-        translation.keycode,
-        false,
-        false,
-        false,
-        false,
-      );
-    }
-
-    this.classicPressedKeys.clear();
+    releaseModernClassicKeys(this.engine, this.classicPressedKeys);
   }
 
   private getClassicLogicalPointerPosition(): { x: number; y: number } {
-    const rect = this.config.canvas.getBoundingClientRect();
-    const width = rect.width > 0 ? rect.width : this.config.canvas.width;
-    const height = rect.height > 0 ? rect.height : this.config.canvas.height;
-    const x = clamp(Math.floor((this.classicDomDebug.x / width) * this.config.canvas.width), 0, this.config.canvas.width - 1);
-    const y = clamp(Math.floor((this.classicDomDebug.y / height) * this.config.canvas.height), 0, this.config.canvas.height - 1);
-
-    return { x, y };
+    return getModernClassicLogicalPointerPosition(this.config.canvas, this.classicDomDebug);
   }
 
   private updateClassicDebugPanel(snapshot: TrackerSnapshot | null): void {
     if (this.viewMode !== 'classic') {
       return;
     }
-
-    const debugRoot = this.root.querySelector<HTMLElement>('.classic-debug');
-    if (!debugRoot) {
-      return;
-    }
-
-    const rect = this.config.canvas.getBoundingClientRect();
-    const cssWidth = Math.round(rect.width);
-    const cssHeight = Math.round(rect.height);
-    const debug = snapshot?.debug;
-
-    this.setDebugField('dom-mouse', `${this.classicDomDebug.x}, ${this.classicDomDebug.y}`);
-    this.setDebugField(
-      'dom-state',
-      `${this.classicDomDebug.inside ? 'inside' : 'outside'} btn:${this.classicDomDebug.buttons} ev:${this.classicDomDebug.events}`,
-    );
-    this.setDebugField('mouse-abs', debug ? `${debug.mouse.absX}, ${debug.mouse.absY}` : 'n/a');
-    this.setDebugField('mouse-raw', debug ? `${debug.mouse.rawX}, ${debug.mouse.rawY}` : 'n/a');
-    this.setDebugField('mouse-pt2', debug ? `${debug.mouse.x}, ${debug.mouse.y}` : 'n/a');
-    this.setDebugField(
-      'mouse-buttons',
-      debug ? `${debug.mouse.buttons} L:${debug.mouse.left ? '1' : '0'} R:${debug.mouse.right ? '1' : '0'}` : 'n/a',
-    );
-    this.setDebugField('canvas-css', `${cssWidth} x ${cssHeight}`);
-    this.setDebugField('video-render', debug ? `${debug.video.renderW} x ${debug.video.renderH}` : 'n/a');
-    this.setDebugField(
-      'video-scale',
-      debug ? `${debug.video.scaleX.toFixed(4)} / ${debug.video.scaleY.toFixed(4)}` : 'n/a',
-    );
-  }
-
-  private setDebugField(field: string, value: string): void {
-    const element = this.root.querySelector<HTMLElement>(`[data-debug-field="${field}"]`);
-    if (element) {
-      element.textContent = value;
-    }
+    updateModernClassicDebugPanel(this.root, this.config.canvas, this.classicDomDebug, snapshot);
   }
 
   private shiftVisualization(direction: -1 | 1): void {
