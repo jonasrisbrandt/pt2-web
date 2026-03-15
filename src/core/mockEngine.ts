@@ -22,6 +22,8 @@ const CURSOR_FIELDS: CursorField[] = ['note', 'sampleHigh', 'sampleLow', 'effect
 
 const clone = <T>(value: T): T => structuredClone(value);
 const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
+const MODULE_HEADER_BYTES = 1084;
+const PATTERN_BYTES = 1024;
 
 const createEmptyCell = (): PatternCell => ({
   note: null,
@@ -124,6 +126,16 @@ const createSampleData = (samples: SampleSlot[]): Int8Array[] =>
     return new Int8Array(0);
   });
 
+const getModuleSizeBytes = (snapshot: TrackerSnapshot): number => {
+  const patternCount = Math.max(
+    1,
+    snapshot.song.currentPattern + 1,
+    snapshot.pattern.index + 1,
+  );
+  const sampleBytes = snapshot.samples.reduce((sum, sample) => sum + Math.max(0, sample.length), 0);
+  return MODULE_HEADER_BYTES + (patternCount * PATTERN_BYTES) + sampleBytes;
+};
+
 const createSnapshot = (status: string): TrackerSnapshot => ({
   backend: 'mock',
   ready: false,
@@ -146,6 +158,7 @@ const createSnapshot = (status: string): TrackerSnapshot => ({
     currentPattern: 0,
     currentPosition: 0,
     length: 1,
+    sizeBytes: MODULE_HEADER_BYTES + PATTERN_BYTES,
   },
   transport: {
     playing: false,
@@ -421,6 +434,10 @@ export class MockTrackerEngine implements TrackerEngine {
       case 'sample-editor/play':
         this.playSamplePreview(command.mode);
         break;
+      case 'note-preview/play':
+        break;
+      case 'note-preview/stop':
+        break;
     }
 
     this.emitSnapshot();
@@ -438,14 +455,22 @@ export class MockTrackerEngine implements TrackerEngine {
         this.snapshot.transport.playing = true;
         this.restartPlaybackTimer();
         break;
+      case 'transport/pause':
+        this.snapshot.transport.playing = false;
+        this.stopPlaybackTimer();
+        break;
       case 'transport/stop':
         this.snapshot.transport.playing = false;
+        this.snapshot.transport.position = 0;
+        this.snapshot.song.currentPosition = 0;
         this.snapshot.transport.row = 0;
+        this.snapshot.pattern.index = 0;
+        this.snapshot.song.currentPattern = 0;
         this.stopPlaybackTimer();
         break;
       case 'transport/toggle':
         if (this.snapshot.transport.playing) {
-          this.setTransport({ type: 'transport/stop' });
+          this.setTransport({ type: 'transport/pause' });
         } else {
           this.setTransport({ type: 'transport/play-song' });
         }
@@ -501,6 +526,7 @@ export class MockTrackerEngine implements TrackerEngine {
   }
 
   private emitSnapshot(): void {
+    this.snapshot.song.sizeBytes = getModuleSizeBytes(this.snapshot);
     const snapshot = this.getSnapshot();
     for (const listener of this.listeners) {
       listener({ type: 'snapshot', snapshot });

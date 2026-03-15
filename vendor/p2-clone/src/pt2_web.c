@@ -11,6 +11,7 @@
 #endif
 #include "pt2_config.h"
 #include "pt2_diskop.h"
+#include "pt2_audio.h"
 #include "pt2_helpers.h"
 #include "pt2_keyboard.h"
 #include "pt2_module_loader.h"
@@ -26,6 +27,7 @@
 #include "pt2_textedit.h"
 #include "pt2_unicode.h"
 #include "pt2_visuals.h"
+#include "pt2_visuals_sync.h"
 #include "pt2_web.h"
 
 #ifdef __EMSCRIPTEN__
@@ -336,6 +338,29 @@ static void adjustSongLength(int32_t delta)
 	ui.updateSongLength = true;
 }
 
+static int32_t getModuleSizeBytes(void)
+{
+	if (song == NULL)
+		return 0;
+
+	int32_t numPatterns = 0;
+	for (int32_t i = 0; i < 128; i++)
+	{
+		if (song->header.patternTable[i] > numPatterns)
+			numPatterns = song->header.patternTable[i];
+	}
+
+	numPatterns++;
+	if (numPatterns > MAX_PATTERNS)
+		numPatterns = MAX_PATTERNS;
+
+	int32_t sampleBytes = 0;
+	for (int32_t i = 0; i < MOD_SAMPLES; i++)
+		sampleBytes += MAX(0, song->samples[i].length);
+
+	return 1084 + (numPatterns * 1024) + sampleBytes;
+}
+
 static int32_t periodToNoteIndex(int32_t period) // 0 = no note, 1 = illegal note, 2..37 = note
 {
 	if (period == 0)
@@ -411,6 +436,27 @@ static uint16_t parseNotePeriod(const char *note)
 		return 0;
 
 	return (uint16_t)periodTable[tableIndex];
+}
+
+static int32_t parseNoteIndex(const char *note)
+{
+	if (note == NULL || note[0] == '\0' || !strcmp(note, "---"))
+		return -1;
+
+	const int32_t semitone = noteNameToSemitone(note);
+	if (semitone < 0)
+		return -1;
+
+	const char octaveChr = note[2];
+	if (octaveChr < '1' || octaveChr > '3')
+		return -1;
+
+	const int32_t octave = octaveChr - '1';
+	const int32_t noteIndex = (octave * 12) + semitone;
+	if (noteIndex < 0 || noteIndex >= 36)
+		return -1;
+
+	return noteIndex;
 }
 
 static uint8_t parseHexNibble(char chr)
@@ -1179,6 +1225,77 @@ void pt2_web_engine_sample_play(int32_t mode)
 	}
 }
 
+void pt2_web_engine_preview_note(const char *note, int32_t channel)
+{
+	if (song == NULL || song->sampleData == NULL)
+		return;
+
+	const int32_t noteIndex = parseNoteIndex(note);
+	if (noteIndex < 0 || noteIndex >= 36)
+		return;
+
+	channel = CLAMP(channel, 0, PAULA_VOICES - 1);
+
+	moduleSample_t *s = &song->samples[editor.currSample];
+	if (s->length <= 1)
+		return;
+
+	moduleChannel_t *ch = &song->channels[channel];
+	const int16_t period = periodTable[((s->fineTune & 0xF) * 37) + noteIndex];
+
+	editor.currPlayNote = (int8_t)noteIndex;
+
+	lockAudio();
+
+	ch->n_samplenum = editor.currSample;
+	ch->n_volume = s->volume;
+	ch->n_period = period;
+	ch->n_start = &song->sampleData[s->offset];
+	ch->n_length = (uint16_t)((s->loopStart > 0) ? (s->loopStart + s->loopLength) >> 1 : s->length >> 1);
+	ch->n_loopstart = &song->sampleData[s->offset + s->loopStart];
+	ch->n_replen = (uint16_t)(s->loopLength >> 1);
+
+	if (ch->n_length == 0)
+		ch->n_length = 1;
+
+	const uint32_t voiceAddr = 0xDFF0A0 + (channel * 16);
+	paulaWriteWord(voiceAddr + 8, ch->n_volume);
+	paulaWriteWord(voiceAddr + 6, ch->n_period);
+	paulaWritePtr(voiceAddr + 0, ch->n_start);
+	paulaWriteWord(voiceAddr + 4, ch->n_length);
+
+	if (!editor.muted[channel])
+		paulaWriteWord(0xDFF096, 0x8000 | ch->n_dmabit);
+	else
+		paulaWriteWord(0xDFF096, ch->n_dmabit);
+
+	paulaWritePtr(voiceAddr + 0, ch->n_loopstart);
+	paulaWriteWord(voiceAddr + 4, ch->n_replen);
+
+	setVisualsVolume(channel, ch->n_volume);
+	setVisualsPeriod(channel, ch->n_period);
+	setVisualsDataPtr(channel, ch->n_start);
+	setVisualsLength(channel, ch->n_length);
+
+	if (!editor.muted[channel])
+		setVisualsDMACON(0x8000 | ch->n_dmabit);
+	else
+		setVisualsDMACON(ch->n_dmabit);
+
+	setVisualsDataPtr(channel, ch->n_loopstart);
+	setVisualsLength(channel, ch->n_replen);
+
+	unlockAudio();
+}
+
+void pt2_web_engine_preview_note_stop(void)
+{
+	if (song == NULL)
+		return;
+
+	modStop();
+}
+
 void pt2_web_engine_transport_play_song(void)
 {
 	if (song == NULL)
@@ -1195,12 +1312,21 @@ void pt2_web_engine_transport_play_pattern(void)
 	playPattern(song->currRow);
 }
 
+void pt2_web_engine_transport_pause(void)
+{
+	if (song == NULL)
+		return;
+
+	modStop();
+}
+
 void pt2_web_engine_transport_stop(void)
 {
 	if (song == NULL)
 		return;
 
 	modStop();
+	modSetPos(0, 0);
 }
 
 void pt2_web_engine_refresh_layout(void)
@@ -1384,8 +1510,8 @@ const char *pt2_web_engine_snapshot_json(void)
 		",\"song\":{\"title\":");
 	offset = (size_t)jsonAppendQuotedString(snapshotJSON, sizeof (snapshotJSON), offset, song->header.name);
 	offset = (size_t)jsonAppend(snapshotJSON, sizeof (snapshotJSON), offset,
-		",\"currentPattern\":%d,\"currentPosition\":%d,\"length\":%d}",
-		song->currPattern, song->currPos, song->header.songLength);
+		",\"currentPattern\":%d,\"currentPosition\":%d,\"length\":%d,\"sizeBytes\":%d}",
+		song->currPattern, song->currPos, song->header.songLength, getModuleSizeBytes());
 
 	offset = (size_t)jsonAppend(snapshotJSON, sizeof (snapshotJSON), offset,
 		",\"transport\":{\"playing\":%s,\"mode\":\"%s\",\"bpm\":%d,\"speed\":%d,\"row\":%d,\"pattern\":%d,\"position\":%d}",

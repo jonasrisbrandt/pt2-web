@@ -1,7 +1,7 @@
 import type { CursorField, TrackerSnapshot } from '../../core/trackerTypes';
 import type { TrackerEngine } from '../../core/trackerEngine';
 import { clamp, MAX_OCTAVE, MIN_OCTAVE, SAMPLE_PAGE_SIZE } from '../../ui/appShared';
-import { saveModuleFile } from './fileController';
+import { saveModuleFile, saveModuleFileAs } from './fileController';
 
 export type ViewMode = 'modern' | 'classic';
 
@@ -28,6 +28,8 @@ export interface ModernClickActionContext {
   releaseClassicKeys: () => void;
   render: () => void;
   resolveSamplePage: (snapshot: TrackerSnapshot) => number;
+  startSamplePreviewSession: (snapshot: TrackerSnapshot, mode: 'sample' | 'view' | 'selection') => void;
+  stopSamplePreviewSession: () => void;
   setKeyboardOctave: (value: number) => void;
   setLastSelectedSample: (value: number) => void;
   setPendingSampleImportSlot: (value: number | null) => void;
@@ -36,6 +38,7 @@ export interface ModernClickActionContext {
   setSamplePreviewPlaying: (value: boolean) => void;
   setSnapshot: (snapshot: TrackerSnapshot) => void;
   setViewMode: (mode: ViewMode) => void;
+  setVisualizationMode: (mode: 'piano') => void;
   shiftVisualization: (direction: -1 | 1) => void;
   updateModernLiveRegions: (snapshot: TrackerSnapshot) => void;
 }
@@ -57,6 +60,8 @@ export const handleModernClickAction = async ({
   releaseClassicKeys,
   render,
   resolveSamplePage,
+  startSamplePreviewSession,
+  stopSamplePreviewSession,
   setKeyboardOctave,
   setLastSelectedSample,
   setPendingSampleImportSlot,
@@ -65,6 +70,7 @@ export const handleModernClickAction = async ({
   setSamplePreviewPlaying,
   setSnapshot,
   setViewMode,
+  setVisualizationMode,
   shiftVisualization,
   updateModernLiveRegions,
 }: ModernClickActionContext): Promise<boolean> => {
@@ -79,8 +85,25 @@ export const handleModernClickAction = async ({
     case 'save-module':
       await saveModuleFile(engine);
       return true;
+    case 'save-module-as':
+      await saveModuleFileAs(engine);
+      return true;
+    case 'import-samples':
+      sampleInput.multiple = true;
+      setPendingSampleImportSlot(null);
+      sampleInput.click();
+      return true;
     case 'toggle-play':
       engine.setTransport({ type: 'transport/toggle' });
+      return true;
+    case 'transport-play-song':
+      engine.setTransport({ type: 'transport/play-song' });
+      return true;
+    case 'transport-pause':
+      engine.setTransport({ type: 'transport/pause' });
+      return true;
+    case 'transport-stop':
+      engine.setTransport({ type: 'transport/stop' });
       return true;
     case 'stop':
       engine.setTransport({ type: 'transport/stop' });
@@ -167,11 +190,23 @@ export const handleModernClickAction = async ({
       setKeyboardOctave(clamp(keyboardOctave + 1, MIN_OCTAVE, MAX_OCTAVE));
       updateModernLiveRegions(snapshot);
       return true;
+    case 'octave-set-1':
+      setKeyboardOctave(1);
+      updateModernLiveRegions(snapshot);
+      return true;
+    case 'octave-set-2':
+      setKeyboardOctave(2);
+      updateModernLiveRegions(snapshot);
+      return true;
     case 'visualization-prev':
       shiftVisualization(-1);
       return true;
     case 'visualization-next':
       shiftVisualization(1);
+      return true;
+    case 'visualization-piano':
+      setVisualizationMode('piano');
+      render();
       return true;
     case 'sample-page-prev':
       setSamplePage(clamp(resolveSamplePage(snapshot) - 1, 0, getSamplePageCount(snapshot) - 1));
@@ -183,13 +218,24 @@ export const handleModernClickAction = async ({
       return true;
     case 'sample-preview-play':
       engine.dispatch({ type: 'sample-editor/play', mode: 'sample' });
+      {
+        const nextSnapshot = engine.getSnapshot();
+        setSnapshot(nextSnapshot);
+        startSamplePreviewSession(nextSnapshot, 'sample');
+        updateModernLiveRegions(nextSnapshot);
+      }
       setSamplePreviewPlaying(true);
-      updateModernLiveRegions(snapshot);
+      return true;
+    case 'sample-load-selected':
+      sampleInput.multiple = false;
+      setPendingSampleImportSlot(snapshot.selectedSample);
+      sampleInput.click();
       return true;
     case 'sample-preview-stop':
-      engine.setTransport({ type: 'transport/stop' });
+      engine.setTransport({ type: 'transport/pause' });
+      stopSamplePreviewSession();
       setSamplePreviewPlaying(false);
-      updateModernLiveRegions(snapshot);
+      updateModernLiveRegions(engine.getSnapshot());
       return true;
     case 'sample-editor-open':
       clearSampleEditorViewOverride();
@@ -238,20 +284,48 @@ export const handleModernClickAction = async ({
       return true;
     }
     case 'sample-editor-preview': {
-      const mode = snapshot.sampleEditor.selectionStart !== null ? 'selection' : 'view';
-      if (mode === 'view' && sampleEditorViewOverride) {
+      if (sampleEditorViewOverride) {
         const view = getSampleEditorView(snapshot);
         engine.dispatch({ type: 'sample-editor/set-view', start: view.start, length: view.length });
       }
-      engine.dispatch({ type: 'sample-editor/play', mode });
+      engine.dispatch({ type: 'sample-editor/play', mode: 'sample' });
+      {
+        const nextSnapshot = engine.getSnapshot();
+        setSnapshot(nextSnapshot);
+        startSamplePreviewSession(nextSnapshot, 'sample');
+        updateModernLiveRegions(nextSnapshot);
+      }
       setSamplePreviewPlaying(true);
-      updateModernLiveRegions(snapshot);
       return true;
     }
     case 'sample-editor-stop':
-      engine.setTransport({ type: 'transport/stop' });
+      engine.setTransport({ type: 'transport/pause' });
+      stopSamplePreviewSession();
       setSamplePreviewPlaying(false);
-      updateModernLiveRegions(snapshot);
+      updateModernLiveRegions(engine.getSnapshot());
+      return true;
+    case 'sample-editor-toggle-loop':
+      if (!canEditSnapshot(snapshot)) {
+        return true;
+      }
+      if (!(snapshot.samples[snapshot.selectedSample].loopLength > 2 && snapshot.samples[snapshot.selectedSample].length > 2)
+        && snapshot.sampleEditor.selectionStart !== null
+        && snapshot.sampleEditor.selectionEnd !== null
+      ) {
+        engine.dispatch({
+          type: 'sample-editor/set-loop',
+          start: snapshot.sampleEditor.selectionStart,
+          end: snapshot.sampleEditor.selectionEnd,
+        });
+      } else {
+        engine.dispatch({
+          type: 'sample-editor/toggle-loop',
+          enabled: !(snapshot.samples[snapshot.selectedSample].loopLength > 2 && snapshot.samples[snapshot.selectedSample].length > 2),
+        });
+      }
+      setSnapshot(engine.getSnapshot());
+      refreshSelectedSampleWaveform(engine.getSnapshot(), true);
+      updateModernLiveRegions(engine.getSnapshot());
       return true;
     case 'sample-editor-crop':
       if (!canEditSnapshot(snapshot)) {
@@ -295,6 +369,7 @@ export const handleModernClickAction = async ({
       refreshSelectedSampleWaveform(nextSnapshot, true);
       if (nextSnapshot.samples[selectedSample]?.length === 0) {
         setPendingSampleImportSlot(selectedSample);
+        sampleInput.multiple = false;
         render();
         sampleInput.click();
         return true;

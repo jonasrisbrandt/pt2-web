@@ -6,14 +6,18 @@ export interface TrackerApplicationEventBindings {
   config: EngineConfig;
   dom: TrackerAppDom;
   onPatternCanvasPointer: (event: MouseEvent) => void;
+  onPatternCanvasWheel: (event: WheelEvent) => void;
   onSampleEditorPointerDown: (event: MouseEvent) => void;
   onSampleEditorWheel: (event: WheelEvent) => void;
   onPianoPointer: (event: MouseEvent) => void;
   onRootClick: (event: Event) => Promise<void>;
+  onRootDoubleClick: (event: Event) => void;
   onRootChange: (event: Event) => Promise<void>;
   onRootInput: (event: Event) => void;
+  onRootMouseOver: (event: MouseEvent) => void;
   onWindowKeyDown: (event: KeyboardEvent) => void;
   onWindowKeyUp: (event: KeyboardEvent) => void;
+  onWindowPointerDown: (event: MouseEvent) => void;
   onWindowBlur: () => void;
   onClassicCanvasPointerMove: (event: MouseEvent) => void;
   onClassicCanvasPointerButtonDown: (event: MouseEvent) => void;
@@ -30,14 +34,18 @@ export const bindTrackerApplicationEvents = ({
   config,
   dom,
   onPatternCanvasPointer,
+  onPatternCanvasWheel,
   onSampleEditorPointerDown,
   onSampleEditorWheel,
   onPianoPointer,
   onRootClick,
+  onRootDoubleClick,
   onRootChange,
   onRootInput,
+  onRootMouseOver,
   onWindowKeyDown,
   onWindowKeyUp,
+  onWindowPointerDown,
   onWindowBlur,
   onClassicCanvasPointerMove,
   onClassicCanvasPointerButtonDown,
@@ -49,16 +57,20 @@ export const bindTrackerApplicationEvents = ({
   onWindowMouseUp,
 }: TrackerApplicationEventBindings): void => {
   dom.patternCanvas.addEventListener('mousedown', onPatternCanvasPointer);
+  dom.patternCanvas.addEventListener('wheel', onPatternCanvasWheel, { passive: false });
   dom.sampleEditorCanvas.addEventListener('mousedown', onSampleEditorPointerDown);
   dom.sampleEditorCanvas.addEventListener('wheel', onSampleEditorWheel, { passive: false });
   dom.pianoCanvas.addEventListener('mousedown', onPianoPointer);
 
   root.addEventListener('click', (event) => void onRootClick(event));
+  root.addEventListener('dblclick', onRootDoubleClick);
   root.addEventListener('change', (event) => void onRootChange(event));
   root.addEventListener('input', onRootInput);
+  root.addEventListener('mouseover', onRootMouseOver);
 
   window.addEventListener('keydown', onWindowKeyDown);
   window.addEventListener('keyup', onWindowKeyUp);
+  window.addEventListener('mousedown', onWindowPointerDown);
   window.addEventListener('blur', onWindowBlur);
   window.addEventListener('resize', onWindowResize);
   window.addEventListener('mousemove', onWindowMouseMove);

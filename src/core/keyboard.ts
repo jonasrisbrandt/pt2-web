@@ -77,6 +77,9 @@ const noteFromKey = (key: string, octave: number): string | null => {
   return `${noteNames[absolute % 12]}${Math.floor(absolute / 12)}`;
 };
 
+export const getKeyboardNoteFromKey = (key: string, octave: number): string | null =>
+  noteFromKey(key, octave);
+
 export const interpretKeyboard = (
   event: KeyboardEvent,
   snapshot: TrackerSnapshot,
@@ -102,17 +105,45 @@ export const interpretKeyboard = (
     case ' ':
       return { transport: { type: 'transport/toggle' } };
     case 'ArrowUp':
-      return { command: { type: 'cursor/move', rowDelta: -1 } };
+      return {
+        command: {
+          type: 'cursor/set',
+          row: clamp(snapshot.cursor.row - 1, 0, 63),
+          channel: snapshot.cursor.channel,
+          field: snapshot.cursor.field,
+        },
+      };
     case 'ArrowDown':
-      return { command: { type: 'cursor/move', rowDelta: 1 } };
+      return {
+        command: {
+          type: 'cursor/set',
+          row: clamp(snapshot.cursor.row + 1, 0, 63),
+          channel: snapshot.cursor.channel,
+          field: snapshot.cursor.field,
+        },
+      };
     case 'ArrowLeft':
       return { command: moveCursorHorizontally(snapshot, -1) };
     case 'ArrowRight':
       return { command: moveCursorHorizontally(snapshot, 1) };
     case 'PageUp':
-      return { command: { type: 'cursor/move', rowDelta: -16 } };
+      return {
+        command: {
+          type: 'cursor/set',
+          row: clamp(snapshot.cursor.row - 16, 0, 63),
+          channel: snapshot.cursor.channel,
+          field: snapshot.cursor.field,
+        },
+      };
     case 'PageDown':
-      return { command: { type: 'cursor/move', rowDelta: 16 } };
+      return {
+        command: {
+          type: 'cursor/set',
+          row: clamp(snapshot.cursor.row + 16, 0, 63),
+          channel: snapshot.cursor.channel,
+          field: snapshot.cursor.field,
+        },
+      };
     case 'Home':
       return {
         command: {

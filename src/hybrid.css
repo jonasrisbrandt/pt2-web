@@ -54,6 +54,7 @@ input {
 }
 
 .panel,
+.menubar-shell,
 .topbar,
 .toolbar,
 .fatal-screen {
@@ -63,6 +64,7 @@ input {
   backdrop-filter: blur(12px);
 }
 
+.menubar-shell,
 .topbar,
 .toolbar,
 .panel,
@@ -543,6 +545,7 @@ h2 {
 
   .topbar,
   .toolbar,
+  .menubar-shell,
   .panel {
     border-radius: 20px;
   }

@@ -314,6 +314,12 @@ export class WasmTrackerEngine implements TrackerEngine {
       case 'sample-editor/play':
         this.callVoid('pt2_web_engine_sample_play', ['number'], [command.mode === 'selection' ? 2 : command.mode === 'view' ? 1 : 0]);
         break;
+      case 'note-preview/play':
+        this.callVoid('pt2_web_engine_preview_note', ['string', 'number'], [command.note, command.channel]);
+        break;
+      case 'note-preview/stop':
+        this.callVoid('pt2_web_engine_preview_note_stop', [], []);
+        break;
     }
 
     this.emitSnapshot(this.getSnapshot());
@@ -329,12 +335,15 @@ export class WasmTrackerEngine implements TrackerEngine {
       case 'transport/play-pattern':
         this.callVoid('pt2_web_engine_transport_play_pattern', [], []);
         break;
+      case 'transport/pause':
+        this.callVoid('pt2_web_engine_transport_pause', [], []);
+        break;
       case 'transport/stop':
         this.callVoid('pt2_web_engine_transport_stop', [], []);
         break;
       case 'transport/toggle':
         if (snapshot.transport.playing) {
-          this.callVoid('pt2_web_engine_transport_stop', [], []);
+          this.callVoid('pt2_web_engine_transport_pause', [], []);
         } else if (snapshot.transport.mode === 'pattern') {
           this.callVoid('pt2_web_engine_transport_play_pattern', [], []);
         } else {

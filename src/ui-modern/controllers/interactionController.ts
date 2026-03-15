@@ -1,5 +1,5 @@
 import type { CursorField, PatternCell, TrackerSnapshot } from '../../core/trackerTypes';
-import { buildPianoKeys, clamp, CURSOR_FIELDS, moveCursorHorizontally } from '../../ui/appShared';
+import { buildPianoKeys, clamp, CURSOR_FIELDS, type PianoKey } from '../../ui/appShared';
 import { formatCellParam, formatCellSample } from '../../ui/formatters';
 import type { TrackerEngine } from '../../core/trackerEngine';
 
@@ -54,12 +54,11 @@ export const handleModernHexEntry = (
     }
   }
 
-  const nextCursor = moveCursorHorizontally(snapshot.cursor, snapshot.pattern.rows[0]?.channels.length ?? 4, 1);
   engine.dispatch({
     type: 'cursor/set',
-    row,
-    channel: nextCursor.channel,
-    field: nextCursor.field,
+    row: clamp(row + 1, 0, Math.max(0, snapshot.pattern.rows.length - 1)),
+    channel,
+    field,
   });
   return true;
 };
@@ -161,19 +160,13 @@ export interface PianoPointerOptions {
   onAfterCommit: (snapshot: TrackerSnapshot) => void;
 }
 
-export const handlePianoPointer = ({
-  event,
-  engine,
-  snapshot,
-  canvas,
-  canEditSnapshot,
-  onGlow,
-  onActiveNote,
-  onAfterCommit,
-}: PianoPointerOptions): void => {
+export const resolvePianoKeyFromPointer = (
+  event: MouseEvent,
+  canvas: HTMLCanvasElement,
+): PianoKey | null => {
   const rect = canvas.getBoundingClientRect();
   if (rect.width <= 0 || rect.height <= 0) {
-    return;
+    return null;
   }
 
   const x = event.clientX - rect.left;
@@ -191,8 +184,21 @@ export const handlePianoPointer = ({
   const whiteKey = keys
     .filter((key) => !key.black)
     .find((key) => localX >= key.x && localX <= key.x + key.width && y >= keyboardTop && y <= keyboardTop + keyboardHeight);
-  const targetKey = blackKey ?? whiteKey;
 
+  return blackKey ?? whiteKey ?? null;
+};
+
+export const handlePianoPointer = ({
+  event,
+  engine,
+  snapshot,
+  canvas,
+  canEditSnapshot,
+  onGlow,
+  onActiveNote,
+  onAfterCommit,
+}: PianoPointerOptions): void => {
+  const targetKey = resolvePianoKeyFromPointer(event, canvas);
   if (!targetKey || !canEditSnapshot(snapshot) || snapshot.cursor.field !== 'note') {
     return;
   }
@@ -304,13 +310,18 @@ export const completeSampleEditorPointer = (
   }
 
   if (pointer.mode === 'select') {
-    if (Math.abs(pointer.current - pointer.anchor) < 2) {
+    const rawStart = Math.min(pointer.anchor, pointer.current);
+    const rawEnd = Math.max(pointer.anchor, pointer.current);
+    const start = clamp(rawStart & ~1, 0, Math.max(0, snapshot.sampleEditor.sampleLength - 1));
+    const end = clamp((rawEnd + 1) & ~1, 0, snapshot.sampleEditor.sampleLength);
+
+    if (end - start < 2) {
       engine.dispatch({ type: 'sample-editor/set-selection', start: null, end: null });
     } else {
       engine.dispatch({
         type: 'sample-editor/set-selection',
-        start: Math.min(pointer.anchor, pointer.current),
-        end: Math.max(pointer.anchor, pointer.current),
+        start,
+        end,
       });
     }
   } else if (pointer.mode === 'loop-start') {
@@ -341,4 +352,22 @@ export const zoomSampleEditorFromWheel = (
     anchor,
   });
   return engine.getSnapshot();
+};
+
+export const scrollPatternFromWheel = (
+  event: WheelEvent,
+  snapshot: TrackerSnapshot,
+): { row: number; channel: number; field: CursorField } | null => {
+  if (event.deltaY === 0) {
+    return null;
+  }
+
+  event.preventDefault();
+  const delta = Math.sign(event.deltaY) * Math.max(1, Math.round(Math.abs(event.deltaY) / 80));
+
+  return {
+    row: clamp(snapshot.cursor.row + delta, 0, Math.max(0, snapshot.pattern.rows.length - 1)),
+    channel: snapshot.cursor.channel,
+    field: snapshot.cursor.field,
+  };
 };

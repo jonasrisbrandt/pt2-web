@@ -16,8 +16,33 @@ export const renderToolbarButton = (
   active = false,
 ): string => `<button type="button" class="toolbar-button${active ? ' is-active' : ''}" data-action="${action}">${iconHtml}<span>${escapeHtml(label)}</span></button>`;
 
+export const renderToolIconButton = (
+  action: string,
+  iconHtml: string,
+  label: string,
+  active = false,
+  disabled = false,
+  role = '',
+  valueText = '',
+): string => `
+  <button
+    type="button"
+    class="tool-icon-button${active ? ' is-active' : ''}"
+    data-action="${action}"
+    ${role ? `data-role="${role}"` : ''}
+    aria-label="${escapeHtml(label)}"
+    title="${escapeHtml(label)}"
+    ${disabled ? 'disabled' : ''}
+  >${iconHtml}${valueText ? `<span class="tool-icon-button__value" aria-hidden="true">${escapeHtml(valueText)}</span>` : ''}<span class="sr-only">${escapeHtml(label)}</span></button>
+`;
+
 export const renderTransportButtonContent = (playing: boolean, iconHtml: string): string =>
   `${iconHtml}<span>${playing ? 'Stop' : 'Play'}</span>`;
+
+const formatDisplayName = (value: string): string => {
+  const normalized = value.trim();
+  return (normalized || 'UNTITLED').toUpperCase();
+};
 
 export const renderModuleStepperCard = (
   label: string,
@@ -34,8 +59,8 @@ export const renderModuleStepperCard = (
     <div class="module-stepper">
       <strong class="module-stepper__value" data-role="metric-${role}">${escapeHtml(value)}</strong>
       <div class="module-stepper__buttons">
-        <button type="button" class="icon-button icon-button--small" data-action="${downAction}" ${enabled ? '' : 'disabled'}>${downIconHtml}<span class="sr-only">Decrease ${escapeHtml(label)}</span></button>
         <button type="button" class="icon-button icon-button--small" data-action="${upAction}" ${enabled ? '' : 'disabled'}>${upIconHtml}<span class="sr-only">Increase ${escapeHtml(label)}</span></button>
+        <button type="button" class="icon-button icon-button--small" data-action="${downAction}" ${enabled ? '' : 'disabled'}>${downIconHtml}<span class="sr-only">Decrease ${escapeHtml(label)}</span></button>
       </div>
     </div>
   </div>
@@ -117,19 +142,19 @@ export const renderModernPatternRow = (
 export const getSampleCardLabel = (sample: SampleSlot): string => {
   const trimmedName = sample.name.trim();
   if (trimmedName.length > 0) {
-    return trimmedName;
+    return formatDisplayName(trimmedName);
   }
 
-  return sample.length > 0 ? '' : 'Empty';
+  return sample.length > 0 ? `SAMPLE ${String(sample.index + 1).padStart(2, '0')}` : '';
 };
 
 export const getSelectedSampleHeading = (sample: SampleSlot): string => {
   const trimmedName = sample.name.trim();
   if (trimmedName.length > 0) {
-    return trimmedName;
+    return formatDisplayName(trimmedName);
   }
 
-  return sample.length > 0 ? `Sample ${String(sample.index + 1).padStart(2, '0')}` : 'Empty';
+  return `SAMPLE ${String(sample.index + 1).padStart(2, '0')}`;
 };
 
 export const getSamplePageCount = (sampleCount: number, pageSize: number): number =>
@@ -198,10 +223,12 @@ export const renderSampleWaveform = (sample: SampleSlot): string => {
 };
 
 export const renderSampleChip = (sample: SampleSlot, selectedSample: number): string => `
-  <button class="sample-chip${sample.index === selectedSample ? ' is-selected' : ''}" type="button" data-action="select-sample" data-sample="${sample.index}">
+  <button class="sample-chip${sample.index === selectedSample ? ' is-selected' : ''}${sample.length <= 0 ? ' is-empty' : ''}" type="button" data-action="select-sample" data-sample="${sample.index}">
     ${renderSampleWaveform(sample)}
     <span class="sample-chip__index">${String(sample.index + 1).padStart(2, '0')}</span>
-    <strong class="sample-chip__name">${escapeHtml(getSampleCardLabel(sample))}</strong>
+    ${sample.length > 0
+      ? `<strong class="sample-chip__name">${escapeHtml(getSampleCardLabel(sample))}</strong>`
+      : '<span class="sample-chip__empty" aria-hidden="true">+</span>'}
   </button>
 `;
 
@@ -219,28 +246,35 @@ export const renderSampleBank = (
 
 export interface SelectedSamplePanelRenderOptions {
   sample: SampleSlot;
+  editable: boolean;
   samplePreviewPlaying: boolean;
+  sampleTitleHtml: string;
   playIconHtml: string;
   stopIconHtml: string;
   editIconHtml: string;
+  replaceIconHtml: string;
 }
 
 export const renderSelectedSamplePanel = ({
   sample,
+  editable,
   samplePreviewPlaying,
+  sampleTitleHtml,
   playIconHtml,
   stopIconHtml,
   editIconHtml,
+  replaceIconHtml,
 }: SelectedSamplePanelRenderOptions): string => `
   <section class="sample-detail-panel">
     <div class="sample-detail-head">
       <div>
         <p class="metric-label">Sample ${String(sample.index + 1).padStart(2, '0')}</p>
-        <strong class="sample-detail-title" data-role="selected-sample-title">${escapeHtml(getSelectedSampleHeading(sample))}</strong>
+        <strong class="sample-detail-title panel-title panel-title--editable" data-role="selected-sample-title">${sampleTitleHtml}</strong>
       </div>
       <div class="sample-detail-actions">
-        <button type="button" class="toolbar-button toolbar-button--primary" data-role="sample-preview-toggle" data-action="${samplePreviewPlaying ? 'sample-preview-stop' : 'sample-preview-play'}" ${sample.length > 0 ? '' : 'disabled'}>${samplePreviewPlaying ? stopIconHtml : playIconHtml}<span>${samplePreviewPlaying ? 'Stop' : 'Play'}</span></button>
-        <button type="button" class="toolbar-button" data-action="sample-editor-open">${editIconHtml}<span>Edit</span></button>
+        ${renderToolIconButton(samplePreviewPlaying ? 'sample-preview-stop' : 'sample-preview-play', samplePreviewPlaying ? stopIconHtml : playIconHtml, samplePreviewPlaying ? 'Stop preview' : 'Play preview', samplePreviewPlaying, sample.length <= 0, 'sample-preview-toggle')}
+        ${renderToolIconButton('sample-editor-open', editIconHtml, 'Open sample editor', false, sample.length <= 0)}
+        ${renderToolIconButton('sample-load-selected', replaceIconHtml, sample.length > 0 ? 'Replace sample' : 'Load sample', false, !editable)}
       </div>
     </div>
     <div class="sample-preview-host" data-role="sample-preview-host"></div>
@@ -252,90 +286,147 @@ export interface SampleEditorPanelRenderOptions {
   snapshot: TrackerSnapshot;
   editable: boolean;
   samplePreviewPlaying: boolean;
-  selectedSampleHeading: string;
+  collapsed: boolean;
+  collapseIconHtml: string;
+  selectedSampleTitleHtml: string;
   view: { start: number; length: number; end: number };
+  showAllIconHtml: string;
+  showSelectionIconHtml: string;
   playIconHtml: string;
   stopIconHtml: string;
+  loopIconHtml: string;
+  volumeIconHtml: string;
+  fineTuneIconHtml: string;
+  cropIconHtml: string;
+  cutIconHtml: string;
+  backIconHtml: string;
+  volumePopoverOpen: boolean;
+  fineTunePopoverOpen: boolean;
+  volumeEditOpen: boolean;
+  fineTuneEditOpen: boolean;
+  volumeEditValue: string;
+  fineTuneEditValue: string;
 }
+
+const formatFineTune = (value: number): string => (value > 0 ? `+${value}` : String(value));
 
 export const renderSampleEditorPanel = ({
   snapshot,
   editable,
   samplePreviewPlaying,
-  selectedSampleHeading,
+  collapsed,
+  collapseIconHtml,
+  selectedSampleTitleHtml,
   view,
+  showAllIconHtml,
+  showSelectionIconHtml,
   playIconHtml,
   stopIconHtml,
+  loopIconHtml,
+  volumeIconHtml,
+  fineTuneIconHtml,
+  cropIconHtml,
+  cutIconHtml,
+  backIconHtml,
+  volumePopoverOpen,
+  fineTunePopoverOpen,
+  volumeEditOpen,
+  fineTuneEditOpen,
+  volumeEditValue,
+  fineTuneEditValue,
 }: SampleEditorPanelRenderOptions): string => {
   const sample = snapshot.samples[snapshot.selectedSample];
   const loopEnabled = sample.loopLength > 2 && sample.length > 2;
-  const loopEnd = sample.loopStart + sample.loopLength;
-  const showScrollbar = sample.length > 0 && view.length > 0 && view.length < sample.length;
+  const hasSelection = snapshot.sampleEditor.selectionStart !== null
+    && snapshot.sampleEditor.selectionEnd !== null
+    && snapshot.sampleEditor.selectionEnd - snapshot.sampleEditor.selectionStart >= 2;
   const scrollMax = Math.max(0, sample.length - view.length);
 
   return `
-    <article class="panel sample-editor-panel editor-panel-shell">
-      <div class="panel-head compact sample-editor-head">
-        <div>
-          <p class="panel-label">Sample editor</p>
-          <h2 class="panel-title--subtle">Sample ${String(sample.index + 1).padStart(2, '0')} ${escapeHtml(selectedSampleHeading)}</h2>
+    <article class="panel sample-editor-panel editor-panel-shell${collapsed ? ' is-collapsed' : ''}">
+      <div class="panel-head compact panel-head--section sample-editor-head">
+        <div class="panel-heading-copy">
+          <button type="button" class="section-heading-button" data-action="toggle-section-editor" aria-expanded="${collapsed ? 'false' : 'true'}">
+            <span class="section-heading-button__copy">
+              <span class="panel-label">Sample editor</span>
+            </span>
+            <span class="section-heading-button__icon" aria-hidden="true">${collapseIconHtml}</span>
+          </button>
+          <h2 class="panel-title panel-title--editable panel-title--section-detail">Sample ${String(sample.index + 1).padStart(2, '0')} ${selectedSampleTitleHtml}</h2>
         </div>
-        <div class="sample-editor-toolbar">
-          <button type="button" class="toolbar-button" data-action="sample-editor-show-all" ${sample.length > 0 ? '' : 'disabled'}>Show all</button>
-          <button type="button" class="toolbar-button" data-action="sample-editor-show-selection" ${(sample.length > 0 && snapshot.sampleEditor.selectionStart !== null) ? '' : 'disabled'}>Show selection</button>
-          <button type="button" class="toolbar-button toolbar-button--primary" data-role="sample-editor-preview-toggle" data-action="${samplePreviewPlaying ? 'sample-editor-stop' : 'sample-editor-preview'}" ${sample.length > 0 ? '' : 'disabled'}>${samplePreviewPlaying ? stopIconHtml : playIconHtml}<span>${samplePreviewPlaying ? 'Stop' : 'Play'}</span></button>
-          <button type="button" class="toolbar-button" data-action="sample-editor-crop" ${(editable && snapshot.sampleEditor.selectionStart !== null) ? '' : 'disabled'}>Crop</button>
-          <button type="button" class="toolbar-button" data-action="sample-editor-cut" ${(editable && snapshot.sampleEditor.selectionStart !== null) ? '' : 'disabled'}>Cut</button>
-          <button type="button" class="toolbar-button" data-action="sample-editor-close">Back to pattern</button>
+        <div class="panel-head-actions">
+          <div class="sample-editor-toolbar">
+            ${renderToolIconButton(samplePreviewPlaying ? 'sample-editor-stop' : 'sample-editor-preview', samplePreviewPlaying ? stopIconHtml : playIconHtml, samplePreviewPlaying ? 'Stop preview' : 'Play preview', samplePreviewPlaying, sample.length <= 0, 'sample-editor-preview-toggle')}
+            ${renderToolIconButton('sample-editor-toggle-loop', loopIconHtml, loopEnabled ? 'Disable loop' : 'Enable loop', loopEnabled, !editable || sample.length <= 1)}
+            <span class="toolbar-divider" aria-hidden="true"></span>
+            <div class="tool-popover-anchor">
+              ${renderToolIconButton('sample-editor-open-volume', volumeIconHtml, `Volume ${sample.volume}`, volumePopoverOpen, !editable || sample.length <= 0, '', String(sample.volume))}
+              <div class="tool-popover${volumePopoverOpen ? ' is-open' : ''}" data-role="sample-editor-volume-popover">
+                <div class="tool-popover__head">
+                  <span class="tool-popover__label">Volume</span>
+                  ${volumeEditOpen
+                    ? `<input class="tool-popover__inline-input" data-inline-sample-number="volume" type="number" min="0" max="64" step="1" value="${escapeHtml(volumeEditValue)}" ${editable ? '' : 'disabled'} />`
+                    : `<button type="button" class="tool-popover__value-button" data-popover-value-edit="volume" data-role="sample-editor-volume-display">${sample.volume}</button>`}
+                </div>
+                <input class="tool-popover__slider" data-input="sample-volume" type="range" min="0" max="64" step="1" value="${sample.volume}" ${editable ? '' : 'disabled'} />
+              </div>
+            </div>
+            <div class="tool-popover-anchor">
+              ${renderToolIconButton('sample-editor-open-finetune', fineTuneIconHtml, `Fine tune ${formatFineTune(sample.fineTune)}`, fineTunePopoverOpen, !editable || sample.length <= 0, '', formatFineTune(sample.fineTune))}
+              <div class="tool-popover${fineTunePopoverOpen ? ' is-open' : ''}" data-role="sample-editor-finetune-popover">
+                <div class="tool-popover__head">
+                  <span class="tool-popover__label">Fine tune</span>
+                  ${fineTuneEditOpen
+                    ? `<input class="tool-popover__inline-input" data-inline-sample-number="fineTune" type="number" min="-8" max="7" step="1" value="${escapeHtml(fineTuneEditValue)}" ${editable ? '' : 'disabled'} />`
+                    : `<button type="button" class="tool-popover__value-button" data-popover-value-edit="fineTune" data-role="sample-editor-finetune-display">${formatFineTune(sample.fineTune)}</button>`}
+                </div>
+                <input class="tool-popover__slider" data-input="sample-finetune" type="range" min="-8" max="7" step="1" value="${sample.fineTune}" ${editable ? '' : 'disabled'} />
+              </div>
+            </div>
+            <span class="toolbar-divider" aria-hidden="true"></span>
+            ${renderToolIconButton('sample-editor-show-selection', showSelectionIconHtml, 'Show selection', false, !hasSelection)}
+            ${renderToolIconButton('sample-editor-show-all', showAllIconHtml, 'Show all', false, sample.length <= 0)}
+            ${renderToolIconButton('sample-editor-crop', cropIconHtml, 'Crop selection', false, !(editable && hasSelection))}
+            ${renderToolIconButton('sample-editor-cut', cutIconHtml, 'Cut selection', false, !(editable && hasSelection))}
+            <span class="toolbar-divider" aria-hidden="true"></span>
+            ${renderToolIconButton('sample-editor-close', backIconHtml, 'Back to pattern')}
+          </div>
         </div>
       </div>
-      <div class="field-row field-row--sample-detail">
-        <label class="field">
-          <span>Name</span>
-          <input data-input="sample-name" value="${escapeHtml(sample.name)}" maxlength="22" ${editable ? '' : 'disabled'} />
-        </label>
-        <label class="field">
-          <span>Volume</span>
-          <input data-input="sample-volume" type="number" min="0" max="64" value="${sample.volume}" ${editable ? '' : 'disabled'} />
-        </label>
-        <label class="field">
-          <span>Fine tune</span>
-          <input data-input="sample-finetune" type="number" min="-8" max="7" value="${sample.fineTune}" ${editable ? '' : 'disabled'} />
-        </label>
-      </div>
-      <div class="field-row field-row--sample-loop">
-        <label class="field field--toggle">
-          <span>Loop</span>
-          <span class="toggle-control">
-            <input data-input="sample-loop-enabled" type="checkbox" ${loopEnabled ? 'checked' : ''} ${editable ? '' : 'disabled'} />
-            <span>Enabled</span>
-          </span>
-        </label>
-        <label class="field">
-          <span>Loop start</span>
-          <input data-input="sample-loop-start" type="number" min="0" max="${Math.max(0, sample.length - 2)}" value="${sample.loopStart}" ${(editable && loopEnabled) ? '' : 'disabled'} />
-        </label>
-        <label class="field">
-          <span>Loop end</span>
-          <input data-input="sample-loop-end" type="number" min="2" max="${sample.length}" value="${loopEnd}" ${(editable && loopEnabled) ? '' : 'disabled'} />
-        </label>
-      </div>
-      <div class="sample-editor-meta">
-        <span class="panel-title--subtle" data-role="sample-editor-visible">Visible ${view.start} - ${view.end}</span>
-        <span class="panel-title--subtle" data-role="sample-editor-loop">Loop ${sample.loopStart} - ${sample.loopStart + sample.loopLength}</span>
-      </div>
-      <div class="sample-editor-host" data-role="sample-editor-host"></div>
-      <div class="sample-editor-scrollbar-wrap${showScrollbar ? '' : ' is-hidden'}">
-        <input
-          class="sample-editor-scrollbar"
-          data-input="sample-editor-scroll"
-          type="range"
-          min="0"
-          max="${scrollMax}"
-          step="1"
-          value="${clamp(view.start, 0, scrollMax)}"
-          ${showScrollbar ? '' : 'disabled'}
-        />
+      <div class="panel-body">
+        <div class="sample-editor-host" data-role="sample-editor-host"></div>
+        <div class="sample-editor-scrollbar-wrap">
+          <input
+            class="sample-editor-scrollbar"
+            data-input="sample-editor-scroll"
+            type="range"
+            min="0"
+            max="${scrollMax}"
+            step="1"
+            value="${clamp(view.start, 0, scrollMax)}"
+            ${sample.length > 0 ? '' : 'disabled'}
+          />
+        </div>
+        <div class="sample-editor-meta">
+          <div class="module-card module-card--readout">
+            <span class="metric-label">Length</span>
+            <div class="module-readout">
+              <strong class="module-readout__value" data-role="sample-editor-length">${sample.length}</strong>
+            </div>
+          </div>
+          <div class="module-card module-card--readout">
+            <span class="metric-label">Visible</span>
+            <div class="module-readout">
+              <strong class="module-readout__value" data-role="sample-editor-visible">${view.start} - ${view.end}</strong>
+            </div>
+          </div>
+          <div class="module-card module-card--readout">
+            <span class="metric-label">Loop</span>
+            <div class="module-readout">
+              <strong class="module-readout__value" data-role="sample-editor-loop">${snapshot.sampleEditor.loopStart} - ${snapshot.sampleEditor.loopEnd}</strong>
+            </div>
+          </div>
+        </div>
       </div>
     </article>
   `;

@@ -63,6 +63,25 @@ const drawSampleMarker = (
   ctx.fill();
 };
 
+const drawPlayheadMarker = (
+  ctx: CanvasRenderingContext2D,
+  drawRoundedRect: RoundedRectDrawer,
+  x: number,
+  top: number,
+  height: number,
+): void => {
+  ctx.strokeStyle = 'rgba(255, 191, 122, 0.95)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(x, top + 6);
+  ctx.lineTo(x, top + height - 6);
+  ctx.stroke();
+
+  ctx.fillStyle = 'rgba(255, 191, 122, 0.95)';
+  drawRoundedRect(ctx, x - 4, top + 4, 8, 8, 4);
+  ctx.fill();
+};
+
 const drawWaveformPath = (
   ctx: CanvasRenderingContext2D,
   data: Int8Array,
@@ -245,6 +264,7 @@ export interface SelectedSamplePreviewRenderOptions {
   canvas: HTMLCanvasElement;
   snapshot: TrackerSnapshot;
   height: number;
+  previewPlayheadOffset: number | null;
   getWaveformSource: (sample: SampleSlot) => Int8Array;
   drawRoundedRect: RoundedRectDrawer;
 }
@@ -253,6 +273,7 @@ export const drawSelectedSamplePreview = ({
   canvas,
   snapshot,
   height,
+  previewPlayheadOffset,
   getWaveformSource,
   drawRoundedRect,
 }: SelectedSamplePreviewRenderOptions): void => {
@@ -318,12 +339,18 @@ export const drawSelectedSamplePreview = ({
     drawSampleMarker(ctx, drawRoundedRect, loopStartX, plotTop, plotHeight, '#5ab8ff');
     drawSampleMarker(ctx, drawRoundedRect, loopEndX, plotTop, plotHeight, '#5ab8ff');
   }
+
+  if (previewPlayheadOffset !== null) {
+    const playheadX = plotLeft + ((previewPlayheadOffset / Math.max(1, sample.length)) * plotWidth);
+    drawPlayheadMarker(ctx, drawRoundedRect, playheadX, plotTop, plotHeight);
+  }
 };
 
 export interface SampleEditorRenderOptions {
   canvas: HTMLCanvasElement;
   snapshot: TrackerSnapshot;
   height: number;
+  previewPlayheadOffset: number | null;
   getWaveformSource: (sample: SampleSlot) => Int8Array;
   getSampleEditorView: (snapshot: TrackerSnapshot) => SampleEditorView;
   getDraftSampleSelection: (snapshot: TrackerSnapshot) => { start: number | null; end: number | null };
@@ -335,6 +362,7 @@ export const drawSampleEditor = ({
   canvas,
   snapshot,
   height,
+  previewPlayheadOffset,
   getWaveformSource,
   getSampleEditorView,
   getDraftSampleSelection,
@@ -413,6 +441,10 @@ export const drawSampleEditor = ({
     ctx.fill();
     drawSampleMarker(ctx, drawRoundedRect, loopStartX, layout.top, layout.height, '#5ab8ff');
     drawSampleMarker(ctx, drawRoundedRect, loopEndX, layout.top, layout.height, '#5ab8ff');
+  }
+
+  if (previewPlayheadOffset !== null && previewPlayheadOffset >= view.start && previewPlayheadOffset <= view.end) {
+    drawPlayheadMarker(ctx, drawRoundedRect, sampleOffsetToEditorX(previewPlayheadOffset, view, layout), layout.top, layout.height);
   }
 
   ctx.fillStyle = 'rgba(239, 248, 231, 0.72)';

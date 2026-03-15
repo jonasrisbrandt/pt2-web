@@ -2,7 +2,7 @@ import type { CursorField, TrackerSnapshot } from '../core/trackerTypes';
 
 export const MIN_OCTAVE = 1;
 export const MAX_OCTAVE = 2;
-export const SAMPLE_PAGE_SIZE = 12;
+export const SAMPLE_PAGE_SIZE = 16;
 export const CURSOR_FIELDS: CursorField[] = ['note', 'sampleHigh', 'sampleLow', 'effect', 'paramHigh', 'paramLow'];
 export const CHANNEL_COLORS = ['#deff5a', '#43f7af', '#5ab8ff', '#ffad46'];
 export const NOTE_NAMES = ['C-', 'C#', 'D-', 'D#', 'E-', 'F-', 'F#', 'G-', 'G#', 'A-', 'A#', 'B-'];

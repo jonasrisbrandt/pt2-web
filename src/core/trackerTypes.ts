@@ -107,6 +107,7 @@ export interface TrackerSnapshot {
     currentPattern: number;
     currentPosition: number;
     length: number;
+    sizeBytes: number;
   };
   transport: {
     playing: boolean;
@@ -166,11 +167,14 @@ export type TrackerCommand =
   | { type: 'sample-editor/toggle-loop'; enabled: boolean }
   | { type: 'sample-editor/crop' }
   | { type: 'sample-editor/cut' }
-  | { type: 'sample-editor/play'; mode: 'sample' | 'view' | 'selection' };
+  | { type: 'sample-editor/play'; mode: 'sample' | 'view' | 'selection' }
+  | { type: 'note-preview/play'; note: string; channel: number }
+  | { type: 'note-preview/stop' };
 
 export type TransportCommand =
   | { type: 'transport/play-song' }
   | { type: 'transport/play-pattern' }
+  | { type: 'transport/pause' }
   | { type: 'transport/stop' }
   | { type: 'transport/toggle' };
 

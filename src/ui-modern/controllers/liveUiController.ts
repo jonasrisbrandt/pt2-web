@@ -45,6 +45,8 @@ export interface SamplePanelUpdateOptions {
   getSelectedSampleHeading: (sample: SampleSlot) => string;
   renderSampleBank: (snapshot: TrackerSnapshot, samplePage: number) => string;
   renderSelectedSamplePanel: (sample: SampleSlot, snapshot: TrackerSnapshot) => string;
+  renderSelectedSampleTitle?: (sample: SampleSlot) => string;
+  syncSelectedSampleTitle?: boolean;
 }
 
 export const updateSamplePanel = ({
@@ -59,6 +61,8 @@ export const updateSamplePanel = ({
   getSelectedSampleHeading,
   renderSampleBank,
   renderSelectedSamplePanel,
+  renderSelectedSampleTitle,
+  syncSelectedSampleTitle = true,
 }: SamplePanelUpdateOptions): string => {
   const selectedSample = snapshot.samples[snapshot.selectedSample];
   const samplePage = resolveSamplePage(snapshot);
@@ -78,7 +82,16 @@ export const updateSamplePanel = ({
   }
 
   if (samplePanelKey === nextSamplePanelKey) {
-    setLiveText(root, 'selected-sample-title', getSelectedSampleHeading(selectedSample));
+    if (syncSelectedSampleTitle) {
+      const title = root.querySelector<HTMLElement>('[data-role="selected-sample-title"]');
+      if (title) {
+        if (renderSelectedSampleTitle) {
+          title.innerHTML = renderSelectedSampleTitle(selectedSample);
+        } else {
+          title.textContent = getSelectedSampleHeading(selectedSample);
+        }
+      }
+    }
     setLiveText(root, 'selected-sample-hint', formatSelectedSampleHint(selectedSample));
     return nextSamplePanelKey;
   }
@@ -97,7 +110,16 @@ export const updateSamplePanel = ({
     }
   }
 
-  setLiveText(root, 'selected-sample-title', getSelectedSampleHeading(selectedSample));
+  if (syncSelectedSampleTitle) {
+    const title = root.querySelector<HTMLElement>('[data-role="selected-sample-title"]');
+    if (title) {
+      if (renderSelectedSampleTitle) {
+        title.innerHTML = renderSelectedSampleTitle(selectedSample);
+      } else {
+        title.textContent = getSelectedSampleHeading(selectedSample);
+      }
+    }
+  }
   setLiveText(root, 'selected-sample-hint', formatSelectedSampleHint(selectedSample));
   return nextSamplePanelKey;
 };
