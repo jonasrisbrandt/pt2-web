@@ -1,0 +1,55 @@
+#pragma once
+
+#include <stdbool.h>
+#include <stdint.h>
+
+void pt2_web_export_file(const char *filename, const char *mimeType);
+int32_t pt2_web_load_file_from_path(const char *fullPath, int32_t autoPlay);
+int32_t pt2_web_engine_boot(void);
+int32_t pt2_web_engine_load_module(const char *fullPath);
+const char *pt2_web_engine_save_module(const char *directory);
+int32_t pt2_web_engine_load_sample(const char *fullPath);
+const char *pt2_web_engine_save_sample(int32_t slot, const char *format, const char *directory);
+void pt2_web_engine_new_song(void);
+void pt2_web_engine_set_title(const char *title);
+void pt2_web_engine_set_position(int32_t position);
+void pt2_web_engine_set_bpm(int32_t bpm);
+void pt2_web_engine_set_speed(int32_t speed);
+void pt2_web_engine_set_pattern(int32_t pattern);
+void pt2_web_engine_adjust_song_length(int32_t delta);
+void pt2_web_engine_set_edit_mode(int32_t enabled);
+void pt2_web_engine_toggle_mute_channel(int32_t channel);
+void pt2_web_engine_set_cursor(int32_t row, int32_t channel, int32_t field);
+void pt2_web_engine_move_cursor(int32_t rowDelta, int32_t channelDelta, int32_t fieldDelta);
+void pt2_web_engine_set_cell(int32_t row, int32_t channel, const char *note, int32_t sample, const char *effect, const char *param);
+void pt2_web_engine_clear_cell(int32_t row, int32_t channel);
+void pt2_web_engine_select_sample(int32_t sample);
+void pt2_web_engine_update_sample(int32_t sample, const char *name, int32_t volume, int32_t fineTune, int32_t length, int32_t loopStart, int32_t loopLength);
+void pt2_web_engine_open_sample_editor(int32_t sample);
+void pt2_web_engine_close_sample_editor(void);
+void pt2_web_engine_sample_show_all(void);
+void pt2_web_engine_sample_show_selection(void);
+void pt2_web_engine_sample_zoom_in(int32_t anchor);
+void pt2_web_engine_sample_zoom_out(int32_t anchor);
+void pt2_web_engine_sample_set_view(int32_t start, int32_t length);
+void pt2_web_engine_sample_set_selection(int32_t start, int32_t end);
+void pt2_web_engine_sample_set_loop(int32_t start, int32_t end);
+void pt2_web_engine_sample_toggle_loop(int32_t enabled);
+void pt2_web_engine_sample_crop(void);
+void pt2_web_engine_sample_cut(void);
+void pt2_web_engine_sample_play(int32_t mode);
+void pt2_web_engine_transport_play_song(void);
+void pt2_web_engine_transport_play_pattern(void);
+void pt2_web_engine_transport_stop(void);
+void pt2_web_engine_refresh_layout(void);
+void pt2_web_engine_pointer_move(int32_t x, int32_t y, int32_t buttons);
+void pt2_web_engine_pointer_button(int32_t x, int32_t y, int32_t button, int32_t pressed, int32_t buttons);
+void pt2_web_engine_key_down(int32_t scancode, int32_t keycode, int32_t shift, int32_t ctrl, int32_t alt, int32_t meta);
+void pt2_web_engine_key_up(int32_t scancode, int32_t keycode, int32_t shift, int32_t ctrl, int32_t alt, int32_t meta);
+void pt2_web_engine_text_input(const char *text);
+const int8_t *pt2_web_engine_scope_buffer(void);
+int32_t pt2_web_engine_scope_buffer_length(void);
+const int8_t *pt2_web_engine_sample_buffer(int32_t sample);
+int32_t pt2_web_engine_sample_buffer_length(int32_t sample);
+const char *pt2_web_engine_scope_json(void);
+const char *pt2_web_engine_snapshot_json(void);

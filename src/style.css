@@ -1,0 +1,161 @@
+:root {
+  color-scheme: dark;
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  background:
+    radial-gradient(circle at top, #2c1b12 0%, #120c0a 38%, #060505 100%);
+  color: #f5e8d4;
+  line-height: 1.4;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+button,
+a {
+  font: inherit;
+}
+
+#app {
+  width: min(1440px, calc(100vw - 32px));
+  margin: 0 auto;
+  padding: 24px 0 32px;
+}
+
+.shell-header,
+.shell-toolbar,
+.stage,
+.canvas-frame,
+.notes {
+  border: 1px solid rgba(255, 221, 178, 0.16);
+  background: rgba(20, 14, 11, 0.82);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
+}
+
+.shell-header,
+.shell-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 20px;
+}
+
+.shell-toolbar {
+  margin-top: 16px;
+}
+
+.eyebrow {
+  margin: 0 0 4px;
+  font-size: 0.8rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #d7a66c;
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: clamp(1.8rem, 3vw, 2.8rem);
+}
+
+.status {
+  color: #f7c98e;
+  text-align: right;
+}
+
+.stage {
+  margin-top: 16px;
+  padding: 20px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 20px;
+}
+
+.canvas-frame {
+  display: grid;
+  place-items: center;
+  min-height: 720px;
+  padding: 20px;
+  background:
+    linear-gradient(180deg, rgba(83, 49, 23, 0.34), rgba(10, 9, 8, 0.92)),
+    repeating-linear-gradient(
+      45deg,
+      rgba(255, 207, 145, 0.025) 0,
+      rgba(255, 207, 145, 0.025) 8px,
+      transparent 8px,
+      transparent 16px
+    );
+}
+
+#pt2-canvas {
+  width: min(100%, 1080px);
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  background: #000;
+}
+
+.notes {
+  padding: 20px;
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+
+.shell-toolbar button,
+.export-link {
+  appearance: none;
+  border: 1px solid rgba(245, 196, 134, 0.35);
+  background: linear-gradient(180deg, #5b3415, #2c1a0f);
+  color: #ffe9c8;
+  padding: 10px 14px;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.shell-toolbar button:hover,
+.export-link:hover {
+  background: linear-gradient(180deg, #77431a, #392113);
+}
+
+.shell-toolbar {
+  justify-content: flex-start;
+}
+
+.export-link[hidden] {
+  display: none;
+}
+
+code {
+  font-family: Consolas, "Courier New", monospace;
+}
+
+@media (max-width: 1100px) {
+  .stage {
+    grid-template-columns: 1fr;
+  }
+
+  .canvas-frame {
+    min-height: 0;
+  }
+
+  .shell-header,
+  .shell-toolbar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .status {
+    text-align: left;
+  }
+}

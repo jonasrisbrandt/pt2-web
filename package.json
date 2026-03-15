@@ -1,0 +1,21 @@
+{
+  "name": "pt2-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build:web": "vite build",
+    "build:wasm": "powershell -ExecutionPolicy Bypass -File ./scripts/build-wasm.ps1",
+    "build": "npm run build:wasm && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "lucide": "^0.542.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2",
+    "vite": "^7.1.3"
+  }
+}

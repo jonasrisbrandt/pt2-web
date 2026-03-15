@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ProTracker 2 web clone</title>
+    <script type="module" src="/src/bootstrap.ts"></script>
+  </head>
+  <body>
+    <div id="app">
+      <header class="shell-header">
+        <div>
+          <p class="eyebrow">Amiga tracker</p>
+          <h1>PT2 Web</h1>
+        </div>
+        <p id="status" class="status">Initialiserar wasm-miljön…</p>
+      </header>
+
+      <section class="shell-toolbar">
+        <button id="load-module" type="button">Ladda fil</button>
+        <button id="sync-storage" type="button">Spara workspace</button>
+        <a id="last-export" class="export-link" download hidden>Senaste export</a>
+      </section>
+
+      <main class="stage">
+        <div class="canvas-frame">
+          <canvas id="pt2-canvas"></canvas>
+        </div>
+        <aside class="notes">
+          <h2>Status</h2>
+          <p>
+            Den här porten återanvänder originalkoden från <code>p2-clone</code>
+            via WebAssembly för att nå feature parity utan att duplicera logik i TypeScript.
+          </p>
+          <p>
+            Laddade filer skrivs till ett virtuellt workspace i browsern och exponeras för
+            originalets disk-op.
+          </p>
+        </aside>
+      </main>
+
+      <input
+        id="file-input"
+        type="file"
+        accept=".mod,.m15,.stk,.nst,.ust,.pp,.nt,.wav,.iff,.aiff,.aif,.flac,.raw"
+        hidden
+      />
+    </div>
+  </body>
+  </html>

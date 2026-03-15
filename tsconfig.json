@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "allowJs": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "noEmit": true,
+    "strict": true,
+    "lib": [
+      "DOM",
+      "DOM.Iterable",
+      "ES2022"
+    ]
+  },
+  "include": [
+    "src"
+  ],
+  "exclude": [
+    "src/app.ts"
+  ]
+}
