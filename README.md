@@ -2,6 +2,20 @@
 
 `pt2-web` is a web/wasm porting workspace around a vendored `p2-clone` core. The active application is built as a Vite + TypeScript shell around a wasm-backed tracker engine.
 
+## Screenshots
+
+### Modern view
+
+![Modern tracker view](screenshots/1.png)
+
+### Modern sample editor
+
+![Modern sample editor view](screenshots/2.png)
+
+### Classic view
+
+![Classic tracker view](screenshots/3.png)
+
 ## Architecture
 
 - `src/core/trackerEngine.ts` defines the stable engine contract used by the UI.
