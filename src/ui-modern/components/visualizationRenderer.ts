@@ -117,11 +117,13 @@ export const drawQuadrascopeStack = ({
   ctx.font = '14px Consolas, "Courier New", monospace';
   ctx.textBaseline = 'middle';
 
-  const laneHeight = (height - 36) / 4;
+  const verticalPadding = 16;
+  const laneGap = 10;
+  const laneHeight = (height - (verticalPadding * 2) - (laneGap * 3)) / 4;
   const scopeChannels = quadrascope?.channels ?? [];
 
   for (let channel = 0; channel < 4; channel += 1) {
-    const laneTop = 16 + (channel * laneHeight);
+    const laneTop = verticalPadding + (channel * (laneHeight + laneGap));
     const laneMid = laneTop + (laneHeight / 2);
     const scopeChannel = scopeChannels[channel];
     const samplePoints = scopeChannel?.sample ?? [];
@@ -129,7 +131,7 @@ export const drawQuadrascopeStack = ({
     const active = scopeChannel?.active ?? false;
 
     ctx.fillStyle = 'rgba(255, 255, 255, 0.04)';
-    drawRoundedRect(ctx, 10, laneTop, width - 20, laneHeight - 10, 12);
+    drawRoundedRect(ctx, 10, laneTop, width - 20, laneHeight, 12);
     ctx.fill();
 
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
@@ -183,13 +185,15 @@ export const drawQuadrascopeClassic = ({
   ctx.font = '13px Consolas, "Courier New", monospace';
   ctx.textBaseline = 'middle';
 
-  const columnWidth = (width - 30) / 4;
+  const sidePadding = 10;
+  const columnGap = 8;
+  const columnWidth = (width - (sidePadding * 2) - (columnGap * 3)) / 4;
   const scopeChannels = quadrascope?.channels ?? [];
 
   for (let channel = 0; channel < 4; channel += 1) {
-    const x = 10 + (channel * columnWidth);
+    const x = sidePadding + (channel * (columnWidth + columnGap));
     const y = 14;
-    const w = columnWidth - 8;
+    const w = columnWidth;
     const h = height - 28;
     const midY = y + (h / 2);
     const scopeChannel = scopeChannels[channel];
@@ -302,6 +306,9 @@ export const drawSpectrumAnalyzer = ({
     }
 
     const normalized = mergedSampleLength === 0 ? 0 : clamp((energy / Math.max(1, end - start)) / 96, 0, 1);
+    if (normalized <= 0) {
+      continue;
+    }
     const barHeight = Math.max(4, Math.round(normalized * usableHeight));
     const x = 14 + (bar * slotWidth);
     const y = height - 12 - barHeight;

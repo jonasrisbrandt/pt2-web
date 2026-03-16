@@ -224,7 +224,7 @@ export class TrackerApplication {
   private statusMessage = DEFAULT_STATUS;
   private keyboardOctave = 2;
   private viewMode: 'modern' | 'classic' = 'modern';
-  private visualizationMode: VisualizationMode = 'quad-stack';
+  private visualizationMode: VisualizationMode = 'quad-classic';
   private preferredTransportMode: TransportMode = 'song';
   private samplePage = 0;
   private lastSelectedSample = 0;
@@ -360,8 +360,12 @@ export class TrackerApplication {
 
     this.engine.subscribe((event) => {
       if (event.type === 'snapshot') {
+        const previousPlaying = this.snapshot?.transport.playing ?? false;
         this.snapshot = event.snapshot;
         this.quadrascope = event.snapshot.quadrascope ?? this.quadrascope;
+        if (previousPlaying && !event.snapshot.transport.playing) {
+          this.resetVisualizationState();
+        }
         this.statusMessage = event.snapshot.status;
         this.syncSamplePreviewSession(event.snapshot);
         this.syncPlaybackCoordinator();
@@ -1103,6 +1107,34 @@ export class TrackerApplication {
     }
   }
 
+  private resetVisualizationState(redraw = false): void {
+    this.quadrascope = null;
+    if (this.snapshot) {
+      this.snapshot.quadrascope = undefined;
+    }
+    this.lastPianoTransportKey = null;
+    this.pianoLastFrameAt = null;
+
+    for (let channel = 0; channel < this.activePianoNotes.length; channel += 1) {
+      this.activePianoNotes[channel] = null;
+    }
+
+    for (let channel = 0; channel < this.pianoGlowLevels.length; channel += 1) {
+      const levels = this.pianoGlowLevels[channel];
+      for (let note = 0; note < levels.length; note += 1) {
+        levels[note] = 0;
+      }
+    }
+
+    for (let channel = 0; channel < this.trailColumns.length; channel += 1) {
+      this.trailColumns[channel].length = 0;
+    }
+
+    if (redraw && this.snapshot && this.viewMode === 'modern') {
+      this.drawVisualization(this.snapshot);
+    }
+  }
+
   private needsLiveQuadrascope(): boolean {
     return this.visualizationMode !== 'piano';
   }
@@ -1136,9 +1168,7 @@ export class TrackerApplication {
 
     switch (reason) {
       case 'transport':
-        if (snapshot.sampleEditor.open) {
-          this.drawSampleEditor(snapshot);
-        } else {
+        if (!snapshot.sampleEditor.open) {
           this.drawPatternCanvas(snapshot);
         }
         break;
@@ -1177,6 +1207,7 @@ export class TrackerApplication {
 
     this.lastAppliedLiveStateVersion = liveState.version;
     const snapshot = this.snapshot;
+    const previousPlaying = snapshot.transport.playing;
     snapshot.audio.mode = liveState.audioMode;
     snapshot.audio.stereo = liveState.stereo;
     snapshot.transport.playing = liveState.playing;
@@ -1193,6 +1224,10 @@ export class TrackerApplication {
 
     for (let channel = 0; channel < 4; channel += 1) {
       snapshot.editor.muted[channel] = ((liveState.mutedMask >> channel) & 1) !== 0;
+    }
+
+    if (previousPlaying && !liveState.playing) {
+      this.resetVisualizationState(true);
     }
 
     return true;
@@ -1837,7 +1872,11 @@ export class TrackerApplication {
     if (event.target === this.moduleInput) {
       this.invalidateAllSampleCaches();
       await loadModuleFromInput(this.engine, this.moduleInput);
+      this.suppressNextModernRender = false;
       this.stopSamplePreviewSession(false);
+      this.snapshot = this.engine.getSnapshot();
+      this.samplePanelKey = null;
+      this.render();
       return;
     }
 

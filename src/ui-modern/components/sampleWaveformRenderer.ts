@@ -25,6 +25,82 @@ export interface SampleEditorView {
   end: number;
 }
 
+interface WaveformRenderCache {
+  key: string;
+  canvas: HTMLCanvasElement;
+}
+
+const selectedSamplePreviewCaches = new WeakMap<HTMLCanvasElement, WaveformRenderCache>();
+const sampleEditorCaches = new WeakMap<HTMLCanvasElement, WaveformRenderCache>();
+
+const createCacheCanvas = (): HTMLCanvasElement => document.createElement('canvas');
+
+const ensureCanvasSize = (
+  canvas: HTMLCanvasElement,
+  width: number,
+  height: number,
+  dpr: number,
+): CanvasRenderingContext2D | null => {
+  const physicalWidth = Math.round(width * dpr);
+  const physicalHeight = Math.round(height * dpr);
+  if (canvas.width !== physicalWidth || canvas.height !== physicalHeight) {
+    canvas.width = physicalWidth;
+    canvas.height = physicalHeight;
+    canvas.style.width = '100%';
+    canvas.style.height = `${height}px`;
+  }
+
+  return canvas.getContext('2d');
+};
+
+const drawCachedBase = (
+  ctx: CanvasRenderingContext2D,
+  cacheCanvas: HTMLCanvasElement,
+): void => {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  ctx.drawImage(cacheCanvas, 0, 0);
+};
+
+const getPreviewRenderKey = (
+  sample: SampleSlot,
+  width: number,
+  height: number,
+  dpr: number,
+): string => [
+  sample.index,
+  sample.dataRevision,
+  sample.length,
+  sample.loopStart,
+  sample.loopLength,
+  width,
+  height,
+  dpr,
+].join(':');
+
+const getEditorRenderKey = (
+  sample: SampleSlot,
+  width: number,
+  height: number,
+  dpr: number,
+  view: SampleEditorView,
+  selection: { start: number | null; end: number | null },
+  loop: { start: number; end: number },
+): string => [
+  sample.index,
+  sample.dataRevision,
+  sample.length,
+  view.start,
+  view.length,
+  selection.start ?? -1,
+  selection.end ?? -1,
+  loop.start,
+  loop.end,
+  width,
+  height,
+  dpr,
+].join(':');
+
 export const getSampleEditorLayout = (width: number, height: number): SampleEditorLayout => ({
   left: 18,
   top: 18,
@@ -266,39 +342,14 @@ export interface SelectedSamplePreviewRenderOptions {
   drawRoundedRect: RoundedRectDrawer;
 }
 
-export const drawSelectedSamplePreview = ({
-  canvas,
-  snapshot,
-  height,
-  previewPlayheadOffset,
-  getWaveformSource,
-  drawRoundedRect,
-}: SelectedSamplePreviewRenderOptions): void => {
-  const widthSource = canvas.parentElement?.clientWidth
-    || canvas.getBoundingClientRect().width
-    || 420;
-  if (widthSource <= 0) {
-    return;
-  }
-
-  const width = Math.max(280, Math.round(widthSource));
-  const dpr = window.devicePixelRatio || 1;
-
-  if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
-    canvas.width = Math.round(width * dpr);
-    canvas.height = Math.round(height * dpr);
-    canvas.style.width = '100%';
-    canvas.style.height = `${height}px`;
-  }
-
-  const ctx = canvas.getContext('2d');
-  if (!ctx) {
-    return;
-  }
-
-  const sample = snapshot.samples[snapshot.selectedSample];
-  const data = getWaveformSource(sample);
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+const renderSelectedSamplePreviewBase = (
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  sample: SampleSlot,
+  data: Int8Array,
+  drawRoundedRect: RoundedRectDrawer,
+): void => {
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = 'rgba(8, 13, 10, 0.92)';
   drawRoundedRect(ctx, 0, 0, width, height, 18);
@@ -336,8 +387,122 @@ export const drawSelectedSamplePreview = ({
     drawSampleMarker(ctx, drawRoundedRect, loopStartX, plotTop, plotHeight, '#5ab8ff');
     drawSampleMarker(ctx, drawRoundedRect, loopEndX, plotTop, plotHeight, '#5ab8ff');
   }
+};
+
+const renderSampleEditorBase = (
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  sample: SampleSlot,
+  data: Int8Array,
+  view: SampleEditorView,
+  selection: { start: number | null; end: number | null },
+  loop: { start: number; end: number },
+  drawRoundedRect: RoundedRectDrawer,
+): void => {
+  const layout = getSampleEditorLayout(width, height);
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = 'rgba(8, 13, 10, 0.92)';
+  drawRoundedRect(ctx, 0, 0, width, height, 18);
+  ctx.fill();
+
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.035)';
+  drawRoundedRect(ctx, layout.left, layout.top, layout.width, layout.height, 14);
+  ctx.fill();
+
+  if (sample.length <= 0 || data.length <= 0 || view.length <= 0) {
+    ctx.fillStyle = 'rgba(239, 248, 231, 0.52)';
+    ctx.font = '15px "Trebuchet MS", "Segoe UI", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('The selected sample is empty', width / 2, height / 2);
+    return;
+  }
+
+  drawWaveformPath(ctx, data, view.start, view.end, layout.left, layout.top, layout.width, layout.height, 'rgba(120, 240, 191, 0.98)', 'rgba(120, 240, 191, 0.1)');
+
+  const selectionStart = selection.start;
+  const selectionEnd = selection.end;
+  if (selectionStart !== null && selectionEnd !== null) {
+    const x1 = sampleOffsetToEditorX(selectionStart, view, layout);
+    const x2 = sampleOffsetToEditorX(selectionEnd, view, layout);
+    ctx.fillStyle = 'rgba(212, 255, 117, 0.14)';
+    drawRoundedRect(ctx, Math.min(x1, x2), layout.top + 10, Math.max(2, Math.abs(x2 - x1)), layout.height - 20, 10);
+    ctx.fill();
+  }
+
+  if (sample.loopLength > 2) {
+    const loopStartX = sampleOffsetToEditorX(loop.start, view, layout);
+    const loopEndX = sampleOffsetToEditorX(loop.end, view, layout);
+    ctx.fillStyle = 'rgba(90, 184, 255, 0.1)';
+    drawRoundedRect(ctx, Math.min(loopStartX, loopEndX), layout.top + 10, Math.max(2, Math.abs(loopEndX - loopStartX)), layout.height - 20, 10);
+    ctx.fill();
+    drawSampleMarker(ctx, drawRoundedRect, loopStartX, layout.top, layout.height, '#5ab8ff');
+    drawSampleMarker(ctx, drawRoundedRect, loopEndX, layout.top, layout.height, '#5ab8ff');
+  }
+
+  ctx.fillStyle = 'rgba(239, 248, 231, 0.72)';
+  ctx.font = '13px Consolas, "Courier New", monospace';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText(`Start ${view.start}`, layout.left, layout.top + layout.height + 8);
+  ctx.fillText(`End ${view.end}`, layout.left + layout.width - 92, layout.top + layout.height + 8);
+};
+
+export const drawSelectedSamplePreview = ({
+  canvas,
+  snapshot,
+  height,
+  previewPlayheadOffset,
+  getWaveformSource,
+  drawRoundedRect,
+}: SelectedSamplePreviewRenderOptions): void => {
+  const widthSource = canvas.parentElement?.clientWidth
+    || canvas.getBoundingClientRect().width
+    || 420;
+  if (widthSource <= 0) {
+    return;
+  }
+
+  const width = Math.max(280, Math.round(widthSource));
+  const dpr = window.devicePixelRatio || 1;
+  const ctx = ensureCanvasSize(canvas, width, height, dpr);
+  if (!ctx) {
+    return;
+  }
+
+  const sample = snapshot.samples[snapshot.selectedSample];
+  const data = getWaveformSource(sample);
+  const renderKey = getPreviewRenderKey(sample, width, height, dpr);
+  let cache = selectedSamplePreviewCaches.get(canvas);
+  if (!cache) {
+    cache = {
+      key: '',
+      canvas: createCacheCanvas(),
+    };
+    selectedSamplePreviewCaches.set(canvas, cache);
+  }
+
+  if (cache.key !== renderKey) {
+    const cacheCtx = ensureCanvasSize(cache.canvas, width, height, dpr);
+    if (!cacheCtx) {
+      return;
+    }
+
+    cacheCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    renderSelectedSamplePreviewBase(cacheCtx, width, height, sample, data, drawRoundedRect);
+    cache.key = renderKey;
+  }
+
+  drawCachedBase(ctx, cache.canvas);
 
   if (previewPlayheadOffset !== null) {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const plotLeft = 14;
+    const plotTop = 14;
+    const plotWidth = width - 28;
+    const plotHeight = height - 28;
     const playheadX = plotLeft + ((previewPlayheadOffset / Math.max(1, sample.length)) * plotWidth);
     drawPlayheadMarker(ctx, drawRoundedRect, playheadX, plotTop, plotHeight);
   }
@@ -379,75 +544,42 @@ export const drawSampleEditor = ({
 
   const width = Math.max(420, Math.round(widthSource));
   const dpr = window.devicePixelRatio || 1;
-
-  if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
-    canvas.width = Math.round(width * dpr);
-    canvas.height = Math.round(height * dpr);
-    canvas.style.width = '100%';
-    canvas.style.height = `${height}px`;
-  }
-
-  const ctx = canvas.getContext('2d');
+  const ctx = ensureCanvasSize(canvas, width, height, dpr);
   if (!ctx) {
     return;
   }
 
   const sample = snapshot.samples[snapshot.selectedSample];
   const data = getWaveformSource(sample);
-  const layout = getSampleEditorLayout(width, height);
   const selection = getDraftSampleSelection(snapshot);
   const loop = getDraftSampleLoop(snapshot);
   const view = getSampleEditorView(snapshot);
-
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = 'rgba(8, 13, 10, 0.92)';
-  drawRoundedRect(ctx, 0, 0, width, height, 18);
-  ctx.fill();
-
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.035)';
-  drawRoundedRect(ctx, layout.left, layout.top, layout.width, layout.height, 14);
-  ctx.fill();
-
-  if (sample.length <= 0 || data.length <= 0 || view.length <= 0) {
-    ctx.fillStyle = 'rgba(239, 248, 231, 0.52)';
-    ctx.font = '15px "Trebuchet MS", "Segoe UI", sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('The selected sample is empty', width / 2, height / 2);
-    return;
+  const renderKey = getEditorRenderKey(sample, width, height, dpr, view, selection, loop);
+  let cache = sampleEditorCaches.get(canvas);
+  if (!cache) {
+    cache = {
+      key: '',
+      canvas: createCacheCanvas(),
+    };
+    sampleEditorCaches.set(canvas, cache);
   }
 
-  drawWaveformPath(ctx, data, view.start, view.end, layout.left, layout.top, layout.width, layout.height, 'rgba(120, 240, 191, 0.98)', 'rgba(120, 240, 191, 0.1)');
+  if (cache.key !== renderKey) {
+    const cacheCtx = ensureCanvasSize(cache.canvas, width, height, dpr);
+    if (!cacheCtx) {
+      return;
+    }
 
-  const selectionStart = selection.start;
-  const selectionEnd = selection.end;
-  if (selectionStart !== null && selectionEnd !== null) {
-    const x1 = sampleOffsetToEditorX(selectionStart, view, layout);
-    const x2 = sampleOffsetToEditorX(selectionEnd, view, layout);
-    ctx.fillStyle = 'rgba(212, 255, 117, 0.14)';
-    drawRoundedRect(ctx, Math.min(x1, x2), layout.top + 10, Math.max(2, Math.abs(x2 - x1)), layout.height - 20, 10);
-    ctx.fill();
+    cacheCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    renderSampleEditorBase(cacheCtx, width, height, sample, data, view, selection, loop, drawRoundedRect);
+    cache.key = renderKey;
   }
 
-  if (sample.loopLength > 2) {
-    const loopStartX = sampleOffsetToEditorX(loop.start, view, layout);
-    const loopEndX = sampleOffsetToEditorX(loop.end, view, layout);
-    ctx.fillStyle = 'rgba(90, 184, 255, 0.1)';
-    drawRoundedRect(ctx, Math.min(loopStartX, loopEndX), layout.top + 10, Math.max(2, Math.abs(loopEndX - loopStartX)), layout.height - 20, 10);
-    ctx.fill();
-    drawSampleMarker(ctx, drawRoundedRect, loopStartX, layout.top, layout.height, '#5ab8ff');
-    drawSampleMarker(ctx, drawRoundedRect, loopEndX, layout.top, layout.height, '#5ab8ff');
-  }
+  drawCachedBase(ctx, cache.canvas);
 
   if (previewPlayheadOffset !== null && previewPlayheadOffset >= view.start && previewPlayheadOffset <= view.end) {
+    const layout = getSampleEditorLayout(width, height);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     drawPlayheadMarker(ctx, drawRoundedRect, sampleOffsetToEditorX(previewPlayheadOffset, view, layout), layout.top, layout.height);
   }
-
-  ctx.fillStyle = 'rgba(239, 248, 231, 0.72)';
-  ctx.font = '13px Consolas, "Courier New", monospace';
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'top';
-  ctx.fillText(`Start ${view.start}`, layout.left, layout.top + layout.height + 8);
-  ctx.fillText(`End ${view.end}`, layout.left + layout.width - 92, layout.top + layout.height + 8);
 };
