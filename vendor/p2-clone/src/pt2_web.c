@@ -67,11 +67,14 @@ enum
 
 static char snapshotJSON[131072];
 static char scopeJSON[16384];
-static int8_t scopeBuffer[(PAULA_VOICES * (2 + 64))];
+static uint8_t scopeBuffer[sizeof (uint32_t) + (PAULA_VOICES * (2 + 64))];
+static int8_t scopePayload[(PAULA_VOICES * (2 + 64))];
+static uint32_t scopeBufferVersion = 0;
 static char moduleExportPath[PATH_MAX + 1];
 static char sampleExportPath[PATH_MAX + 1];
 static char recentModuleName[PATH_MAX + 1];
 static int32_t pt2webAudioMode = 0;
+static bool pt2webClassicRenderingActive = true;
 static uint32_t pt2webNextSampleDataRevision = 1;
 static uint32_t pt2webSampleDataRevisions[MOD_SAMPLES];
 
@@ -1027,6 +1030,25 @@ const char *pt2_web_engine_save_sample(int32_t slot, const char *format, const c
 	return sampleExportPath;
 }
 
+void pt2_web_engine_set_classic_rendering_active(int32_t active)
+{
+	pt2webClassicRenderingActive = active != 0;
+}
+
+bool pt2_web_engine_classic_rendering_active(void)
+{
+	return pt2webClassicRenderingActive;
+}
+
+void pt2_web_engine_force_redraw(void)
+{
+	if (!pt2webClassicRenderingActive)
+		return;
+
+	renderFrame();
+	flipFrame();
+}
+
 void pt2_web_engine_new_song(void)
 {
 	if (song == NULL)
@@ -1551,8 +1573,8 @@ const int8_t *pt2_web_engine_scope_buffer(void)
 		scope_t state = *sc;
 		int32_t offset = i * (2 + 64);
 
-		scopeBuffer[offset + 0] = state.active ? 1 : 0;
-		scopeBuffer[offset + 1] = clampInt8(state.volume, 0, 64);
+		scopePayload[offset + 0] = state.active ? 1 : 0;
+		scopePayload[offset + 1] = clampInt8(state.volume, 0, 64);
 
 		int32_t pos = state.pos;
 		int32_t length = state.length;
@@ -1575,11 +1597,26 @@ const int8_t *pt2_web_engine_scope_buffer(void)
 				}
 			}
 
-			scopeBuffer[offset + 2 + j] = clampInt8(sampleValue, -128, 127);
+			scopePayload[offset + 2 + j] = clampInt8(sampleValue, -128, 127);
 		}
 	}
 
-	return scopeBuffer;
+	if (memcmp(&scopeBuffer[sizeof (uint32_t)], scopePayload, sizeof (scopePayload)) != 0)
+	{
+		scopeBufferVersion++;
+		if (scopeBufferVersion == 0)
+			scopeBufferVersion = 1;
+
+		memcpy(&scopeBuffer[sizeof (uint32_t)], scopePayload, sizeof (scopePayload));
+	}
+	else if (scopeBufferVersion == 0)
+	{
+		scopeBufferVersion = 1;
+		memcpy(&scopeBuffer[sizeof (uint32_t)], scopePayload, sizeof (scopePayload));
+	}
+
+	memcpy(scopeBuffer, &scopeBufferVersion, sizeof (scopeBufferVersion));
+	return (const int8_t *)scopeBuffer;
 }
 
 int32_t pt2_web_engine_scope_buffer_length(void)

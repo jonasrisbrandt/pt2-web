@@ -192,6 +192,7 @@ const createSnapshot = (status: string): TrackerSnapshot => ({
     rows: createEmptyRows(),
   },
   quadrascope: {
+    version: 0,
     channels: Array.from({ length: DEFAULT_CHANNELS }, () => ({
       active: false,
       volume: 0,
@@ -282,6 +283,10 @@ export class MockTrackerEngine implements TrackerEngine {
       mimeType: 'application/json',
       bytes: new TextEncoder().encode(JSON.stringify(sample, null, 2)),
     };
+  }
+
+  setClassicRenderingActive(_active: boolean): void {
+    // No-op in mock mode.
   }
 
   dispatch(command: TrackerCommand): void {
@@ -603,6 +608,9 @@ export class MockTrackerEngine implements TrackerEngine {
           (this.playbackAccumulatedMs + Math.max(0, performance.now() - (this.playbackStartedAt ?? performance.now()))) / 1000,
         )
         : this.snapshot.transport.elapsedSeconds;
+      if (this.snapshot.quadrascope) {
+        this.snapshot.quadrascope.version += 1;
+      }
       this.snapshot.quadrascope?.channels.forEach((channel, index) => {
         channel.active = this.snapshot.transport.playing;
         channel.volume = 24 + ((index * 9 + this.snapshot.transport.row) % 36);
@@ -864,6 +872,9 @@ export class MockTrackerEngine implements TrackerEngine {
     let phase = 0;
     this.previewTimer = window.setInterval(() => {
       phase = (phase + 1) % 64;
+      if (this.snapshot.quadrascope) {
+        this.snapshot.quadrascope.version += 1;
+      }
       this.snapshot.quadrascope?.channels.forEach((channel, index) => {
         const stride = Math.max(1, Math.floor(slice.length / 64));
         channel.active = true;
@@ -875,6 +886,9 @@ export class MockTrackerEngine implements TrackerEngine {
 
     window.setTimeout(() => {
       this.stopPreviewTimer();
+      if (this.snapshot.quadrascope) {
+        this.snapshot.quadrascope.version += 1;
+      }
       this.snapshot.quadrascope?.channels.forEach((channel) => {
         channel.active = false;
         channel.volume = 0;

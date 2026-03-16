@@ -62,6 +62,7 @@ export interface QuadrascopeChannel {
 }
 
 export interface QuadrascopeState {
+  version: number;
   channels: QuadrascopeChannel[];
 }
 

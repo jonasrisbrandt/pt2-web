@@ -28,6 +28,7 @@
 #include "pt2_config.h"
 #include "pt2_visuals.h"
 #include "pt2_edit.h"
+#include "pt2_web.h"
 #include "pt2_module_loader.h"
 #include "pt2_module_saver.h"
 #include "pt2_scopes.h"
@@ -396,8 +397,12 @@ static void mainLoopIteration(void)
 	if (!mouse.buttonWaiting && ui.sampleMarkingPos == -1 && !ui.forceSampleDrag && !ui.forceVolDrag && !ui.forceSampleEdit)
 		handleGUIButtonRepeat();
 
-	renderFrame();
-	flipFrame();
+	if (pt2_web_engine_classic_rendering_active())
+	{
+		renderFrame();
+		flipFrame();
+	}
+
 	endFPSCounter();
 }
 

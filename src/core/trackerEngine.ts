@@ -17,6 +17,7 @@ export interface TrackerEngine {
   saveModule(): Promise<ExportedFile>;
   loadSample(file: Uint8Array, name: string): Promise<void>;
   saveSample(slot: number, format: SampleExportFormat): Promise<ExportedFile>;
+  setClassicRenderingActive(active: boolean): void;
   dispatch(command: TrackerCommand): void;
   setTransport(command: TransportCommand): void;
   refreshLayout(): void;

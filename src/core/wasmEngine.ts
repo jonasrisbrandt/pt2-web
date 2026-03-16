@@ -98,6 +98,10 @@ export class WasmTrackerEngine implements TrackerEngine {
   private scopeJsonSupported = true;
   private liveStateBufferSupported = true;
   private liveStateFallbackVersion = 0;
+  private scopeFallbackVersion = 0;
+  private quadrascopeCache: QuadrascopeState | null = null;
+  private quadrascopeVersion = -1;
+  private classicRenderingActive: boolean | null = null;
 
   async init(config: EngineConfig): Promise<void> {
     this.config = config;
@@ -186,6 +190,18 @@ export class WasmTrackerEngine implements TrackerEngine {
       mimeType: format === 'wav' ? 'audio/wav' : 'application/octet-stream',
       bytes: module.FS.readFile(path),
     };
+  }
+
+  setClassicRenderingActive(active: boolean): void {
+    if (this.classicRenderingActive === active) {
+      return;
+    }
+
+    this.classicRenderingActive = active;
+    this.callVoid('pt2_web_engine_set_classic_rendering_active', ['number'], [active ? 1 : 0]);
+    if (active) {
+      this.callVoid('pt2_web_engine_force_redraw', [], []);
+    }
   }
 
   dispatch(command: TrackerCommand): void {
@@ -422,6 +438,10 @@ export class WasmTrackerEngine implements TrackerEngine {
   getSnapshot(): TrackerSnapshot {
     const json = this.callString('pt2_web_engine_snapshot_json', [], []);
     this.snapshot = JSON.parse(json) as TrackerSnapshot;
+    if (this.snapshot.quadrascope && typeof this.snapshot.quadrascope.version !== 'number') {
+      this.scopeFallbackVersion += 1;
+      this.snapshot.quadrascope.version = this.scopeFallbackVersion;
+    }
     return this.snapshot;
   }
 
@@ -479,23 +499,50 @@ export class WasmTrackerEngine implements TrackerEngine {
       const module = this.requireModule();
       const pointer = this.callNumber('pt2_web_engine_scope_buffer', [], []);
       const length = this.callNumber('pt2_web_engine_scope_buffer_length', [], []);
-      if (pointer < 0 || length <= 0) {
+      const headerSize = 4;
+      const channelStride = 66;
+      if (pointer < 0 || length < headerSize + channelStride) {
         return this.getQuadrascopeFromJson();
       }
 
-      const bytes = module.HEAPU8.subarray(pointer, pointer + length);
-      const channelStride = 66;
-      const channelCount = Math.floor(bytes.length / channelStride);
-      const channels = Array.from({ length: channelCount }, (_, index) => {
-        const base = index * channelStride;
-        return {
-          active: bytes[base] !== 0,
-          volume: bytes[base + 1] ?? 0,
-          sample: Array.from(module.HEAP8.subarray(pointer + base + 2, pointer + base + channelStride)),
-        };
-      });
+      const view = new DataView(module.HEAPU8.buffer, pointer, length);
+      const version = view.getUint32(0, true);
+      if (this.quadrascopeCache && this.quadrascopeVersion === version) {
+        if (this.snapshot) {
+          this.snapshot.quadrascope = this.quadrascopeCache;
+        }
+        return this.quadrascopeCache;
+      }
 
-      const quadrascope = { channels };
+      const payloadLength = length - headerSize;
+      const channelCount = Math.floor(payloadLength / channelStride);
+      let quadrascope = this.quadrascopeCache;
+      if (!quadrascope || quadrascope.channels.length !== channelCount) {
+        quadrascope = {
+          version,
+          channels: Array.from({ length: channelCount }, () => ({
+            active: false,
+            volume: 0,
+            sample: Array.from({ length: 64 }, () => 0),
+          })),
+        };
+        this.quadrascopeCache = quadrascope;
+      }
+
+      const heap = module.HEAP8;
+      for (let index = 0; index < channelCount; index += 1) {
+        const base = pointer + headerSize + (index * channelStride);
+        const channel = quadrascope.channels[index];
+        channel.active = heap[base] !== 0;
+        channel.volume = module.HEAPU8[base + 1] ?? 0;
+        const samples = channel.sample;
+        for (let point = 0; point < 64; point += 1) {
+          samples[point] = heap[base + 2 + point] ?? 0;
+        }
+      }
+
+      quadrascope.version = version;
+      this.quadrascopeVersion = version;
       if (this.snapshot) {
         this.snapshot.quadrascope = quadrascope;
       }
@@ -550,6 +597,10 @@ export class WasmTrackerEngine implements TrackerEngine {
       }
 
       const quadrascope = JSON.parse(json) as QuadrascopeState;
+      if (typeof quadrascope.version !== 'number') {
+        this.scopeFallbackVersion += 1;
+        quadrascope.version = this.scopeFallbackVersion;
+      }
       if (this.snapshot) {
         this.snapshot.quadrascope = quadrascope;
       }

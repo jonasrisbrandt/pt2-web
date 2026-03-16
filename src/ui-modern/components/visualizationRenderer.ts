@@ -25,6 +25,41 @@ export interface RoundedRectDrawer {
   ): void;
 }
 
+type PianoKey = ReturnType<typeof buildPianoKeys>[number];
+
+interface CachedPianoKeys {
+  width: number;
+  whiteKeys: PianoKey[];
+  blackKeys: PianoKey[];
+}
+
+const spectrumSamples = new Int16Array(4 * 64);
+let cachedPianoKeys: CachedPianoKeys | null = null;
+
+const getCachedPianoKeys = (width: number): CachedPianoKeys => {
+  if (cachedPianoKeys && cachedPianoKeys.width === width) {
+    return cachedPianoKeys;
+  }
+
+  const keys = buildPianoKeys(width);
+  const whiteKeys: PianoKey[] = [];
+  const blackKeys: PianoKey[] = [];
+  for (const key of keys) {
+    if (key.black) {
+      blackKeys.push(key);
+    } else {
+      whiteKeys.push(key);
+    }
+  }
+
+  cachedPianoKeys = {
+    width,
+    whiteKeys,
+    blackKeys,
+  };
+  return cachedPianoKeys;
+};
+
 const setupCanvas = (
   canvas: HTMLCanvasElement,
   minWidth: number,
@@ -239,7 +274,16 @@ export const drawSpectrumAnalyzer = ({
   }
 
   const channels = quadrascope?.channels ?? [];
-  const allSamples = channels.flatMap((channel) => channel.sample);
+  let mergedSampleLength = 0;
+  for (let channel = 0; channel < channels.length; channel += 1) {
+    const samples = channels[channel]?.sample ?? [];
+    const copyLength = Math.min(64, samples.length);
+    for (let index = 0; index < copyLength; index += 1) {
+      spectrumSamples[mergedSampleLength + index] = samples[index] ?? 0;
+    }
+    mergedSampleLength += copyLength;
+  }
+
   const barCount = compact
     ? Math.max(32, Math.floor(width / 12))
     : Math.max(24, Math.floor(width / 24));
@@ -250,14 +294,14 @@ export const drawSpectrumAnalyzer = ({
     : Math.max(8, Math.min(14, slotWidth - 1));
 
   for (let bar = 0; bar < barCount; bar += 1) {
-    const start = Math.floor((bar / barCount) * allSamples.length);
-    const end = Math.max(start + 1, Math.floor(((bar + 1) / barCount) * allSamples.length));
+    const start = Math.floor((bar / barCount) * mergedSampleLength);
+    const end = Math.max(start + 1, Math.floor(((bar + 1) / barCount) * mergedSampleLength));
     let energy = 0;
     for (let index = start; index < end; index += 1) {
-      energy += Math.abs(allSamples[index] ?? 0);
+      energy += Math.abs(spectrumSamples[index] ?? 0);
     }
 
-    const normalized = allSamples.length === 0 ? 0 : clamp((energy / Math.max(1, end - start)) / 96, 0, 1);
+    const normalized = mergedSampleLength === 0 ? 0 : clamp((energy / Math.max(1, end - start)) / 96, 0, 1);
     const barHeight = Math.max(4, Math.round(normalized * usableHeight));
     const x = 14 + (bar * slotWidth);
     const y = height - 12 - barHeight;
@@ -307,7 +351,11 @@ export const drawSignalTrails = ({
     const laneTop = 12 + (channel * laneHeight);
     const laneMid = laneTop + (laneHeight / 2);
     const samples = channels[channel]?.sample ?? [];
-    const energy = samples.reduce((sum, value) => sum + Math.abs(value), 0) / Math.max(1, samples.length);
+    let energy = 0;
+    for (let index = 0; index < samples.length; index += 1) {
+      energy += Math.abs(samples[index] ?? 0);
+    }
+    energy /= Math.max(1, samples.length);
 
     const history = trailColumns[channel];
     history.push(energy);
@@ -319,7 +367,8 @@ export const drawSignalTrails = ({
     drawRoundedRect(ctx, 10, laneTop, width - 20, laneHeight - 8, 10);
     ctx.fill();
 
-    history.forEach((value, index) => {
+    for (let index = 0; index < history.length; index += 1) {
+      const value = history[index] ?? 0;
       const t = index / Math.max(1, historyLength - 1);
       const alpha = 0.08 + (t * 0.88);
       const amplitude = clamp(value / 72, 0, 1);
@@ -329,7 +378,7 @@ export const drawSignalTrails = ({
       ctx.fillStyle = rgba(brighten(hexToRgb(CHANNEL_COLORS[channel]), amplitude * 0.3), alpha);
       drawRoundedRect(ctx, x, y, 3, barHeight, 3);
       ctx.fill();
-    });
+    }
 
     ctx.fillStyle = CHANNEL_COLORS[channel];
     ctx.font = '12px Consolas, "Courier New", monospace';
@@ -420,9 +469,7 @@ export const drawPianoVisualizer = ({
   const keyboardTop = 14;
   const keyboardHeight = height - 28;
   const keyboardWidth = width - (padding * 2);
-  const keys = buildPianoKeys(keyboardWidth);
-  const whiteKeys = keys.filter((key) => !key.black);
-  const blackKeys = keys.filter((key) => key.black);
+  const { whiteKeys, blackKeys } = getCachedPianoKeys(keyboardWidth);
 
   ctx.font = '11px Consolas, "Courier New", monospace';
   ctx.textAlign = 'center';
@@ -430,8 +477,13 @@ export const drawPianoVisualizer = ({
 
   for (const key of whiteKeys) {
     const x = padding + key.x;
-    const keyLevels = pianoGlowLevels.map((levels) => levels[key.absolute] ?? 0);
-    const peakLevel = Math.max(...keyLevels);
+    let peakLevel = 0;
+    for (let channel = 0; channel < 4; channel += 1) {
+      const level = pianoGlowLevels[channel][key.absolute] ?? 0;
+      if (level > peakLevel) {
+        peakLevel = level;
+      }
+    }
     const active = peakLevel > 0.01;
 
     ctx.fillStyle = active
@@ -441,15 +493,16 @@ export const drawPianoVisualizer = ({
     ctx.fill();
 
     if (active) {
-      keyLevels.forEach((level, channel) => {
+      for (let channel = 0; channel < 4; channel += 1) {
+        const level = pianoGlowLevels[channel][key.absolute] ?? 0;
         if (level <= 0.01) {
-          return;
+          continue;
         }
 
         ctx.fillStyle = rgba(brighten(hexToRgb(CHANNEL_COLORS[channel]), 0.04), 0.24 + (level * 0.64));
         drawRoundedRect(ctx, x + 2, keyboardTop + 2, key.width - 6, keyboardHeight - 4, 8);
         ctx.fill();
-      });
+      }
     }
 
     ctx.strokeStyle = active ? 'rgba(8, 13, 10, 0.55)' : 'rgba(8, 13, 10, 0.28)';
@@ -467,8 +520,13 @@ export const drawPianoVisualizer = ({
   const blackHeight = keyboardHeight * 0.66;
   for (const key of blackKeys) {
     const x = padding + key.x;
-    const keyLevels = pianoGlowLevels.map((levels) => levels[key.absolute] ?? 0);
-    const peakLevel = Math.max(...keyLevels);
+    let peakLevel = 0;
+    for (let channel = 0; channel < 4; channel += 1) {
+      const level = pianoGlowLevels[channel][key.absolute] ?? 0;
+      if (level > peakLevel) {
+        peakLevel = level;
+      }
+    }
     const active = peakLevel > 0.01;
 
     ctx.fillStyle = active ? 'rgba(24, 31, 29, 0.98)' : 'rgba(14, 18, 17, 0.98)';
@@ -476,15 +534,16 @@ export const drawPianoVisualizer = ({
     ctx.fill();
 
     if (active) {
-      keyLevels.forEach((level, channel) => {
+      for (let channel = 0; channel < 4; channel += 1) {
+        const level = pianoGlowLevels[channel][key.absolute] ?? 0;
         if (level <= 0.01) {
-          return;
+          continue;
         }
 
         ctx.fillStyle = rgba(brighten(hexToRgb(CHANNEL_COLORS[channel]), 0.08), 0.34 + (level * 0.76));
         drawRoundedRect(ctx, x + 2, keyboardTop + 2, key.width - 4, blackHeight - 4, 7);
         ctx.fill();
-      });
+      }
     }
 
     ctx.strokeStyle = active ? 'rgba(239, 248, 231, 0.12)' : 'rgba(239, 248, 231, 0.08)';

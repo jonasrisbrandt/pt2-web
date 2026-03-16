@@ -218,18 +218,7 @@ const drawWaveformPath = (
     return;
   }
 
-  const points: Array<{ x: number; y: number }> = [];
-  for (let pixel = 0; pixel < width; pixel += 1) {
-    const samplePos = safeStart + Math.floor((pixel / Math.max(1, width - 1)) * Math.max(0, span - 1));
-    const value = data[samplePos] ?? 0;
-    const x = left + pixel;
-    points.push({
-      x,
-      y: centerY - ((value / 128) * (height * 0.42)),
-    });
-  }
-
-  if (points.length === 0) {
+  if (width <= 0) {
     return;
   }
 
@@ -238,10 +227,18 @@ const drawWaveformPath = (
   strokeGradient.addColorStop(0.55, stroke);
   strokeGradient.addColorStop(1, 'rgba(138, 199, 255, 0.28)');
 
+  const getSampleY = (pixel: number): number => {
+    const samplePos = safeStart + Math.floor((pixel / Math.max(1, width - 1)) * Math.max(0, span - 1));
+    const value = data[samplePos] ?? 0;
+    return centerY - ((value / 128) * (height * 0.42));
+  };
+
+  const firstX = left;
+  const firstY = getSampleY(0);
   ctx.beginPath();
-  ctx.moveTo(points[0].x, points[0].y);
-  for (let index = 1; index < points.length; index += 1) {
-    ctx.lineTo(points[index].x, points[index].y);
+  ctx.moveTo(firstX, firstY);
+  for (let pixel = 1; pixel < width; pixel += 1) {
+    ctx.lineTo(left + pixel, getSampleY(pixel));
   }
   ctx.strokeStyle = strokeGradient;
   ctx.lineWidth = 1.15;
@@ -250,11 +247,11 @@ const drawWaveformPath = (
   ctx.stroke();
 
   ctx.beginPath();
-  ctx.moveTo(points[0].x, centerY);
-  for (const point of points) {
-    ctx.lineTo(point.x, point.y);
+  ctx.moveTo(firstX, centerY);
+  for (let pixel = 0; pixel < width; pixel += 1) {
+    ctx.lineTo(left + pixel, pixel === 0 ? firstY : getSampleY(pixel));
   }
-  ctx.lineTo(points[points.length - 1].x, centerY);
+  ctx.lineTo(left + width - 1, centerY);
   ctx.closePath();
   ctx.fillStyle = fill;
   ctx.fill();

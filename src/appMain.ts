@@ -153,6 +153,8 @@ interface SampleCacheEntry {
   data: Int8Array;
 }
 
+type ModernRedrawReason = 'full' | 'layout-change' | 'transport' | 'sample-preview' | 'sample-change' | 'ui';
+
 interface ModernDomRefs extends LiveUiRefs {
   appShell: HTMLElement | null;
   patternHost: HTMLElement | null;
@@ -339,10 +341,7 @@ export class TrackerApplication {
       },
       onWindowResize: () => {
         if (this.snapshot && this.viewMode === 'modern') {
-          this.drawPatternCanvas(this.snapshot);
-          this.drawSelectedSamplePreview(this.snapshot);
-          this.drawSampleEditor(this.snapshot);
-          this.drawVisualization(this.snapshot);
+          this.redrawModernCanvases(this.snapshot, 'layout-change');
           const view = this.getSampleEditorView(this.snapshot);
           this.updateSampleEditorScrollbarThumb(this.snapshot.sampleEditor.sampleLength, view.length);
         }
@@ -365,6 +364,7 @@ export class TrackerApplication {
         this.quadrascope = event.snapshot.quadrascope ?? this.quadrascope;
         this.statusMessage = event.snapshot.status;
         this.syncSamplePreviewSession(event.snapshot);
+        this.syncPlaybackCoordinator();
 
         const shouldEdit = !event.snapshot.transport.playing;
         if (!this.syncingAutoEditMode && this.engine && event.snapshot.editor.editMode !== shouldEdit) {
@@ -380,7 +380,7 @@ export class TrackerApplication {
           && (event.snapshot.transport.playing || this.suppressNextModernRender)
         ) {
           this.suppressNextModernRender = false;
-          this.updateModernLiveRegions(event.snapshot);
+          this.updateModernLiveRegions(event.snapshot, 'transport');
           return;
         }
       } else {
@@ -403,8 +403,9 @@ export class TrackerApplication {
       this.engine.dispatch({ type: 'editor/set-edit-mode', enabled: !this.snapshot.transport.playing });
       this.snapshot = this.engine.getSnapshot();
     }
+    this.syncClassicRenderingState();
     this.render();
-    this.ensurePlaybackCoordinator();
+    this.syncPlaybackCoordinator();
   }
 
   private render(): void {
@@ -557,6 +558,8 @@ export class TrackerApplication {
     this.syncSampleNumberFocus(shell);
     this.updateClassicDebugPanel(snapshot);
     this.lastAppliedLiveStateVersion = -1;
+    this.syncClassicRenderingState();
+    this.syncPlaybackCoordinator();
   }
 
   private collectModernDomRefs(shell: HTMLElement): void {
@@ -879,14 +882,16 @@ export class TrackerApplication {
       startedAt: performance.now(),
     };
     this.samplePreviewPlaying = true;
+    this.syncPlaybackCoordinator();
   }
 
   private stopSamplePreviewSession(redraw = true): void {
     const wasPlaying = this.samplePreviewPlaying || this.samplePreviewSession !== null;
     this.samplePreviewSession = null;
     this.samplePreviewPlaying = false;
+    this.syncPlaybackCoordinator();
     if (redraw && wasPlaying && this.snapshot && this.viewMode === 'modern') {
-      this.updateModernLiveRegions(this.snapshot);
+      this.updateModernLiveRegions(this.snapshot, 'sample-preview');
     }
   }
 
@@ -1102,6 +1107,65 @@ export class TrackerApplication {
     return this.visualizationMode !== 'piano';
   }
 
+  private hasPlaybackActivity(snapshot: TrackerSnapshot | null = this.snapshot): boolean {
+    return !!snapshot && (snapshot.transport.playing || this.samplePreviewSession !== null);
+  }
+
+  private stopPlaybackCoordinator(): void {
+    if (this.playbackFrame !== null) {
+      window.cancelAnimationFrame(this.playbackFrame);
+      this.playbackFrame = null;
+    }
+
+    this.lastPlaybackCoordinatorAt = null;
+  }
+
+  private syncPlaybackCoordinator(): void {
+    if (this.hasPlaybackActivity()) {
+      this.ensurePlaybackCoordinator();
+      return;
+    }
+
+    this.stopPlaybackCoordinator();
+  }
+
+  private redrawModernCanvases(snapshot: TrackerSnapshot, reason: ModernRedrawReason): void {
+    if (this.viewMode !== 'modern') {
+      return;
+    }
+
+    switch (reason) {
+      case 'transport':
+        if (snapshot.sampleEditor.open) {
+          this.drawSampleEditor(snapshot);
+        } else {
+          this.drawPatternCanvas(snapshot);
+        }
+        break;
+      case 'sample-preview':
+        this.drawSelectedSamplePreview(snapshot);
+        this.drawSampleEditor(snapshot);
+        break;
+      case 'sample-change':
+        if (snapshot.sampleEditor.open) {
+          this.drawSampleEditor(snapshot);
+        }
+        this.drawSelectedSamplePreview(snapshot);
+        break;
+      case 'layout-change':
+      case 'full':
+      case 'ui':
+        if (snapshot.sampleEditor.open) {
+          this.drawSampleEditor(snapshot);
+        } else {
+          this.drawPatternCanvas(snapshot);
+        }
+        this.drawSelectedSamplePreview(snapshot);
+        this.drawVisualization(snapshot);
+        break;
+    }
+  }
+
   private applyLiveState(liveState: TrackerLiveState): boolean {
     if (!this.snapshot) {
       return false;
@@ -1178,7 +1242,7 @@ export class TrackerApplication {
     if (sample.length > 0 && this.engine) {
       try {
         const waveform = this.engine.getSampleWaveform(sample.index);
-        data = waveform ? new Int8Array(waveform) : new Int8Array(0);
+        data = waveform ? (waveform as unknown as Int8Array<ArrayBuffer>) : new Int8Array(0);
       } catch {
         data = new Int8Array(0);
       }
@@ -1312,19 +1376,25 @@ export class TrackerApplication {
   }
 
   private ensurePlaybackCoordinator(): void {
-    if (this.playbackFrame !== null) {
+    if (this.playbackFrame !== null || !this.hasPlaybackActivity()) {
       return;
     }
 
     const tick = (now: number): void => {
-      this.playbackFrame = window.requestAnimationFrame(tick);
+      this.playbackFrame = null;
       if (!this.snapshot || !this.engine) {
+        this.stopPlaybackCoordinator();
         return;
       }
 
       this.syncSamplePreviewSession(this.snapshot);
+      if (!this.hasPlaybackActivity()) {
+        this.stopPlaybackCoordinator();
+        return;
+      }
+
       const liveCadenceMs = this.viewMode === 'classic' ? 50 : 0;
-      const shouldSyncLiveState = this.snapshot.transport.playing || this.viewMode === 'classic';
+      const shouldSyncLiveState = this.snapshot.transport.playing;
       if (
         shouldSyncLiveState
         && (liveCadenceMs === 0 || this.lastPlaybackCoordinatorAt === null || now - this.lastPlaybackCoordinatorAt >= liveCadenceMs)
@@ -1338,28 +1408,31 @@ export class TrackerApplication {
             this.snapshot = this.engine.getSnapshot();
             this.lastAppliedLiveStateVersion = liveState.version;
             if (this.viewMode === 'modern') {
-              this.updateModernLiveRegions(this.snapshot);
+              this.updateModernLiveRegions(this.snapshot, 'transport');
             }
           } else if (this.applyLiveState(liveState) && this.viewMode === 'modern') {
-            this.updateModernLiveRegions(this.snapshot);
+            this.updateModernLiveRegions(this.snapshot, 'transport');
           }
         }
       }
 
-      if (this.viewMode !== 'modern') {
-        return;
+      if (this.viewMode === 'modern') {
+        if (this.snapshot.transport.playing && this.needsLiveQuadrascope()) {
+          this.quadrascope = this.engine.getQuadrascope() ?? this.quadrascope;
+        }
+
+        if (this.samplePreviewSession) {
+          this.redrawModernCanvases(this.snapshot, 'sample-preview');
+        }
+        if (this.snapshot.transport.playing) {
+          this.drawVisualization(this.snapshot);
+        }
       }
 
-      if (this.needsLiveQuadrascope()) {
-        this.quadrascope = this.engine.getQuadrascope() ?? this.quadrascope;
-      }
-
-      if (this.samplePreviewSession) {
-        this.drawSelectedSamplePreview(this.snapshot);
-        this.drawSampleEditor(this.snapshot);
-      }
-      if (this.snapshot.transport.playing || this.visualizationMode === 'piano' || this.visualizationMode === 'signal-trails') {
-        this.drawVisualization(this.snapshot);
+      if (this.hasPlaybackActivity()) {
+        this.playbackFrame = window.requestAnimationFrame(tick);
+      } else {
+        this.stopPlaybackCoordinator();
       }
     };
 
@@ -2136,7 +2209,7 @@ export class TrackerApplication {
     });
   }
 
-  private updateModernLiveRegions(snapshot: TrackerSnapshot): void {
+  private updateModernLiveRegions(snapshot: TrackerSnapshot, reason: ModernRedrawReason = 'ui'): void {
     if (this.viewMode !== 'modern' || !this.domRefs) {
       return;
     }
@@ -2153,8 +2226,10 @@ export class TrackerApplication {
     this.setElementText(refs.metricSize, `${snapshot.song.sizeBytes} bytes`);
     this.setElementText(refs.octaveValue, `Octave ${this.keyboardOctave}`);
     this.setElementText(refs.visualizationLabel, getVisualizationLabel(this.visualizationMode));
-    this.updateSamplePanel(snapshot);
-    refs = this.domRefs ?? refs;
+    if (reason !== 'transport' && reason !== 'sample-preview') {
+      this.updateSamplePanel(snapshot);
+      refs = this.domRefs ?? refs;
+    }
     this.updateTrackMuteButtons(snapshot);
 
     const playbackMode = snapshot.transport.playing ? snapshot.transport.mode : this.preferredTransportMode;
@@ -2332,13 +2407,7 @@ export class TrackerApplication {
     this.setElementText(refs.sampleEditorVisible, `${view.start} - ${view.end}`);
     this.setElementText(refs.sampleEditorLoop, `${snapshot.sampleEditor.loopStart} - ${snapshot.sampleEditor.loopEnd}`);
 
-    if (snapshot.sampleEditor.open) {
-      this.drawSampleEditor(snapshot);
-    } else {
-      this.drawPatternCanvas(snapshot);
-    }
-    this.drawSelectedSamplePreview(snapshot);
-    this.drawVisualization(snapshot);
+    this.redrawModernCanvases(snapshot, reason);
   }
 
   private updateTrackMuteButtons(snapshot: TrackerSnapshot): void {
@@ -2614,6 +2683,10 @@ export class TrackerApplication {
       return;
     }
     updateModernClassicDebugPanel(this.root, this.config.canvas, this.classicDomDebug, snapshot);
+  }
+
+  private syncClassicRenderingState(): void {
+    this.engine?.setClassicRenderingActive(this.viewMode === 'classic');
   }
 
   private shiftVisualization(direction: -1 | 1): void {
