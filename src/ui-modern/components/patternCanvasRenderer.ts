@@ -118,7 +118,9 @@ const drawPatternCell = (
   cell: PatternCell,
   snapshot: TrackerSnapshot,
 ): void => {
-  const selected = rowIndex === snapshot.cursor.row && channelIndex === snapshot.cursor.channel;
+  const selected = !snapshot.transport.playing
+    && rowIndex === snapshot.cursor.row
+    && channelIndex === snapshot.cursor.channel;
   const note = formatCellNote(cell);
   const sample = formatCellSample(cell);
   const effect = formatCellEffect(cell);
@@ -195,6 +197,7 @@ export const drawPatternCanvas = ({
   const layout = getPatternCanvasLayout(width, rowIndexWidth, gutter, minChannelWidth);
   const firstRow = getPatternViewportStartRow(snapshot, visibleRowCount);
   const centeredRow = snapshot.transport.playing ? snapshot.transport.row : snapshot.cursor.row;
+  const displayCursorRow = snapshot.transport.playing ? snapshot.transport.row : snapshot.cursor.row;
 
   ctx.textBaseline = 'middle';
   ctx.font = '16px Consolas, "Courier New", monospace';
@@ -227,7 +230,7 @@ export const drawPatternCanvas = ({
       ctx.fill();
     }
 
-    if (row.index === snapshot.cursor.row) {
+    if (row.index === displayCursorRow) {
       ctx.strokeStyle = 'rgba(120, 240, 191, 0.5)';
       ctx.lineWidth = 1;
       drawRoundedRect(ctx, 8.5, y + 0.5, width - 17, rowRectHeight - 1, 12);

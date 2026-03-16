@@ -115,7 +115,9 @@ export const renderModernPatternCell = (
   cell: PatternCell,
   snapshot: TrackerSnapshot,
 ): string => {
-  const selected = rowIndex === snapshot.cursor.row && channelIndex === snapshot.cursor.channel;
+  const selected = !snapshot.transport.playing
+    && rowIndex === snapshot.cursor.row
+    && channelIndex === snapshot.cursor.channel;
   const sample = formatCellSample(cell);
   const effect = formatCellEffect(cell);
   const param = formatCellParam(cell);
@@ -129,10 +131,11 @@ export const renderModernPatternRow = (
   snapshot: TrackerSnapshot,
   centered: boolean,
 ): string => {
+  const displayCursorRow = snapshot.transport.playing ? snapshot.transport.row : snapshot.cursor.row;
   const rowClasses = [
     'pattern-row',
     rowIndex === snapshot.transport.row ? 'is-playing' : '',
-    rowIndex === snapshot.cursor.row ? 'is-selected-row' : '',
+    rowIndex === displayCursorRow ? 'is-selected-row' : '',
     centered ? 'is-centered-row' : '',
   ].filter(Boolean).join(' ');
 
@@ -168,34 +171,31 @@ export const getSamplePanelKey = (
   const start = samplePage * pageSize;
   const visible = snapshot.samples
     .slice(start, start + pageSize)
-    .map((sample) => `${sample.index}:${sample.name}:${sample.length}`)
+    .map((sample) => `${sample.index}:${sample.name}:${sample.length}:${sample.dataRevision}`)
     .join('|');
   const selected = snapshot.samples[snapshot.selectedSample];
   const selectedKey = selected
-    ? `${selected.index}:${selected.name}:${selected.length}:${selected.volume}:${selected.fineTune}:${selected.loopStart}:${selected.loopLength}`
+    ? `${selected.index}:${selected.name}:${selected.length}:${selected.volume}:${selected.fineTune}:${selected.loopStart}:${selected.loopLength}:${selected.dataRevision}`
     : 'none';
 
   return `${samplePage}:${snapshot.selectedSample}:${visible}:${selectedKey}`;
 };
 
-export const renderSampleWaveform = (sample: SampleSlot): string => {
-  const values = sample.preview && sample.preview.length > 0
-    ? sample.preview
-    : Array.from({ length: 256 }, () => 0);
-
+export const renderSampleWaveform = (sampleIndex: number, values: ArrayLike<number>): string => {
+  const waveformValues = Array.from(values);
   const width = 240;
   const height = 72;
   const centerY = height / 2;
-  const stepX = values.length > 1 ? width / (values.length - 1) : width;
-  const linePoints = values
-    .map((value, index) => {
+  const stepX = waveformValues.length > 1 ? width / (waveformValues.length - 1) : width;
+  const linePoints = waveformValues
+    .map((value: number, index: number) => {
       const x = (index * stepX).toFixed(2);
       const y = (centerY - ((value / 128) * (height * 0.3))).toFixed(2);
       return `${x},${y}`;
     })
     .join(' ');
-  const areaPath = values
-    .map((value, index) => {
+  const areaPath = waveformValues
+    .map((value: number, index: number) => {
       const x = (index * stepX).toFixed(2);
       const y = (centerY - ((value / 128) * (height * 0.3))).toFixed(2);
       return `${index === 0 ? 'M' : 'L'} ${x} ${y}`;
@@ -205,26 +205,30 @@ export const renderSampleWaveform = (sample: SampleSlot): string => {
   return `
     <svg class="sample-chip__wave" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">
       <defs>
-        <linearGradient id="sample-wave-fill-${sample.index}" x1="0%" y1="0%" x2="100%" y2="0%">
+        <linearGradient id="sample-wave-fill-${sampleIndex}" x1="0%" y1="0%" x2="100%" y2="0%">
           <stop offset="0%" stop-color="rgba(212,255,117,0.03)" />
           <stop offset="55%" stop-color="rgba(120,240,191,0.08)" />
           <stop offset="100%" stop-color="rgba(138,199,255,0.03)" />
         </linearGradient>
-        <linearGradient id="sample-wave-stroke-${sample.index}" x1="0%" y1="0%" x2="100%" y2="0%">
+        <linearGradient id="sample-wave-stroke-${sampleIndex}" x1="0%" y1="0%" x2="100%" y2="0%">
           <stop offset="0%" stop-color="rgba(212,255,117,0.34)" />
           <stop offset="55%" stop-color="rgba(239,248,231,0.52)" />
           <stop offset="100%" stop-color="rgba(138,199,255,0.3)" />
         </linearGradient>
       </defs>
-      <path d="${areaPath}" fill="url(#sample-wave-fill-${sample.index})" />
-      <polyline points="${linePoints}" fill="none" stroke="url(#sample-wave-stroke-${sample.index})" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round" />
+      <path d="${areaPath}" fill="url(#sample-wave-fill-${sampleIndex})" />
+      <polyline points="${linePoints}" fill="none" stroke="url(#sample-wave-stroke-${sampleIndex})" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round" />
     </svg>
   `;
 };
 
-export const renderSampleChip = (sample: SampleSlot, selectedSample: number): string => `
+export const renderSampleChip = (
+  sample: SampleSlot,
+  selectedSample: number,
+  previewValues: ArrayLike<number>,
+): string => `
   <button class="sample-chip${sample.index === selectedSample ? ' is-selected' : ''}${sample.length <= 0 ? ' is-empty' : ''}" type="button" data-action="select-sample" data-sample="${sample.index}">
-    ${renderSampleWaveform(sample)}
+    ${renderSampleWaveform(sample.index, previewValues)}
     <span class="sample-chip__index">${String(sample.index + 1).padStart(2, '0')}</span>
     ${sample.length > 0
       ? `<strong class="sample-chip__name">${escapeHtml(getSampleCardLabel(sample))}</strong>`
@@ -236,11 +240,16 @@ export const renderSampleBank = (
   snapshot: TrackerSnapshot,
   samplePage: number,
   pageSize: number,
+  getPreviewValues?: (sample: SampleSlot) => ArrayLike<number>,
 ): string => {
   const start = samplePage * pageSize;
   return snapshot.samples
     .slice(start, start + pageSize)
-    .map((sample) => renderSampleChip(sample, snapshot.selectedSample))
+    .map((sample) => renderSampleChip(
+      sample,
+      snapshot.selectedSample,
+      getPreviewValues?.(sample) ?? new Int8Array(256),
+    ))
     .join('');
 };
 

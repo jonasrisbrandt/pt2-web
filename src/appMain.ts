@@ -9,6 +9,7 @@ import type {
   PatternCell,
   QuadrascopeState,
   SampleSlot,
+  TrackerLiveState,
   TransportMode,
   TrackerSnapshot,
 } from './core/trackerTypes';
@@ -49,7 +50,7 @@ import {
   zoomSampleEditorFromWheel,
 } from './ui-modern/controllers/interactionController';
 import {
-  setLiveText as setModernLiveText,
+  type LiveUiRefs,
   updateSamplePanel as updateModernSamplePanel,
   updateTrackMuteButtons as updateModernTrackMuteButtons,
 } from './ui-modern/controllers/liveUiController';
@@ -147,6 +148,53 @@ interface SamplePreviewSession {
   startedAt: number;
 }
 
+interface SampleCacheEntry {
+  revision: number;
+  data: Int8Array;
+}
+
+interface ModernDomRefs extends LiveUiRefs {
+  appShell: HTMLElement | null;
+  patternHost: HTMLElement | null;
+  visualizationHost: HTMLElement | null;
+  samplePreviewHost: HTMLElement | null;
+  sampleEditorHost: HTMLElement | null;
+  songTitle: HTMLElement | null;
+  metricPosition: HTMLElement | null;
+  metricPattern: HTMLElement | null;
+  metricLength: HTMLElement | null;
+  metricBpm: HTMLElement | null;
+  metricTime: HTMLElement | null;
+  metricSize: HTMLElement | null;
+  octaveValue: HTMLElement | null;
+  visualizationLabel: HTMLElement | null;
+  transportToggle: HTMLButtonElement | null;
+  transportMode: HTMLButtonElement | null;
+  transportModeValue: HTMLElement | null;
+  audioMode: HTMLButtonElement | null;
+  songStepperButtons: HTMLButtonElement[];
+  octaveButtons: Record<'1' | '2', HTMLButtonElement | null>;
+  samplePreviewToggle: HTMLButtonElement | null;
+  sampleLoadSelected: HTMLButtonElement | null;
+  sampleEditorPreviewToggle: HTMLButtonElement | null;
+  sampleEditorShowSelection: HTMLButtonElement | null;
+  sampleEditorCrop: HTMLButtonElement | null;
+  sampleEditorCut: HTMLButtonElement | null;
+  sampleEditorLoopToggle: HTMLButtonElement | null;
+  sampleEditorVolumeButton: HTMLButtonElement | null;
+  sampleEditorVolumeValue: HTMLElement | null;
+  sampleEditorFineTuneButton: HTMLButtonElement | null;
+  sampleEditorFineTuneValue: HTMLElement | null;
+  sampleEditorLength: HTMLElement | null;
+  sampleEditorVolumeDisplay: HTMLElement | null;
+  sampleEditorFineTuneDisplay: HTMLElement | null;
+  sampleEditorScroll: HTMLInputElement | null;
+  sampleEditorVisible: HTMLElement | null;
+  sampleEditorLoop: HTMLElement | null;
+  sampleVolumeInputs: HTMLInputElement[];
+  sampleFineTuneInputs: HTMLInputElement[];
+}
+
 const iconMarkup = (iconNode: unknown): string =>
   createElement(iconNode as Parameters<typeof createElement>[0], {
     class: 'ui-icon',
@@ -180,12 +228,15 @@ export class TrackerApplication {
   private lastSelectedSample = 0;
   private pendingSampleImportSlot: number | null = null;
   private layoutRefreshFrame: number | null = null;
-  private snapshotPollTimer: number | null = null;
-  private snapshotPollIntervalMs: number | null = null;
-  private scopeFrame: number | null = null;
+  private playbackFrame: number | null = null;
+  private lastPlaybackCoordinatorAt: number | null = null;
+  private lastLiveStateVersion = -1;
+  private lastAppliedLiveStateVersion = -1;
   private samplePanelKey: string | null = null;
-  private sampleWaveform: Int8Array | null = null;
-  private sampleWaveformKey: string | null = null;
+  private mountedVisualizationMode: VisualizationMode | null = null;
+  private domRefs: ModernDomRefs | null = null;
+  private samplePreviewCache = new Map<number, SampleCacheEntry>();
+  private sampleWaveformCache = new Map<number, SampleCacheEntry>();
   private samplePreviewPlaying = false;
   private samplePreviewSession: SamplePreviewSession | null = null;
   private syncingAutoEditMode = false;
@@ -325,18 +376,19 @@ export class TrackerApplication {
 
         if (
           this.viewMode === 'modern'
-          && this.root.querySelector('.app-shell')
+          && this.domRefs?.appShell
           && (event.snapshot.transport.playing || this.suppressNextModernRender)
         ) {
           this.suppressNextModernRender = false;
           this.updateModernLiveRegions(event.snapshot);
-          this.syncSnapshotPolling();
           return;
         }
       } else {
         this.statusMessage = event.message;
       }
 
+      this.lastLiveStateVersion = -1;
+      this.lastAppliedLiveStateVersion = -1;
       this.render();
     });
 
@@ -352,7 +404,7 @@ export class TrackerApplication {
       this.snapshot = this.engine.getSnapshot();
     }
     this.render();
-    this.ensureScopeAnimation();
+    this.ensurePlaybackCoordinator();
   }
 
   private render(): void {
@@ -405,13 +457,13 @@ export class TrackerApplication {
       ),
       this.renderToolIconButton('transport-stop', Square, 'Stop', false, false, 'module-transport-stop'),
       this.renderToolIconButton(
-        'audio-toggle-stereo',
+        'audio-cycle-mode',
         Volume2,
-        snapshot.audio.stereo ? 'Stereo playback' : 'Mono playback',
-        !snapshot.audio.stereo,
+        this.getAudioModeLabel(snapshot),
+        snapshot.audio.mode !== 'custom',
         false,
         'module-audio-mode',
-        snapshot.audio.stereo ? 'S' : 'M',
+        this.getAudioModeValue(snapshot),
       ),
     ].join('');
     const trackHeadersHtml = [
@@ -467,8 +519,9 @@ export class TrackerApplication {
 
     this.root.querySelector('.app-shell')?.remove();
     this.root.prepend(shell);
+    this.collectModernDomRefs(shell);
 
-    const canvasHost = shell.querySelector<HTMLElement>('.engine-canvas-host');
+    const canvasHost = this.domRefs?.appShell?.querySelector<HTMLElement>('.engine-canvas-host') ?? null;
     if (canvasHost) {
       this.config.canvas.className = this.viewMode === 'classic'
         ? 'engine-canvas engine-canvas-classic'
@@ -480,13 +533,13 @@ export class TrackerApplication {
       }
     }
 
-    const patternHost = shell.querySelector<HTMLElement>('[data-role="pattern-host"]');
+    const patternHost = this.domRefs?.patternHost ?? null;
     if (patternHost) {
       patternHost.replaceChildren(this.patternCanvas);
       this.drawPatternCanvas(snapshot);
     }
 
-    const samplePreviewHost = shell.querySelector<HTMLElement>('[data-role="sample-preview-host"]');
+    const samplePreviewHost = this.domRefs?.samplePreviewHost ?? null;
     this.mountVisualization(snapshot);
 
     if (samplePreviewHost) {
@@ -494,7 +547,7 @@ export class TrackerApplication {
       this.drawSelectedSamplePreview(snapshot);
     }
 
-    const sampleEditorHost = shell.querySelector<HTMLElement>('[data-role="sample-editor-host"]');
+    const sampleEditorHost = this.domRefs?.sampleEditorHost ?? null;
     if (sampleEditorHost) {
       sampleEditorHost.replaceChildren(this.sampleEditorCanvas);
       this.drawSampleEditor(snapshot);
@@ -502,9 +555,103 @@ export class TrackerApplication {
 
     this.syncRenameFocus(shell);
     this.syncSampleNumberFocus(shell);
-    this.updateModernLiveRegions(snapshot);
     this.updateClassicDebugPanel(snapshot);
-    this.syncSnapshotPolling();
+    this.lastAppliedLiveStateVersion = -1;
+  }
+
+  private collectModernDomRefs(shell: HTMLElement): void {
+    const selectActionButton = (action: string): HTMLButtonElement | null =>
+      shell.querySelector<HTMLButtonElement>(`[data-action="${action}"]`);
+    const selectRole = <T extends HTMLElement>(role: string): T | null =>
+      shell.querySelector<T>(`[data-role="${role}"]`);
+    const trackMuteButtons = Array.from({ length: 4 }, (_, channel) =>
+      selectRole<HTMLButtonElement>(`track-mute-${channel}`));
+
+    this.domRefs = {
+      appShell: shell,
+      patternHost: selectRole<HTMLElement>('pattern-host'),
+      visualizationHost: selectRole<HTMLElement>('visualization-host'),
+      samplePreviewHost: shell.querySelector<HTMLElement>('[data-role="sample-preview-host"]'),
+      sampleEditorHost: shell.querySelector<HTMLElement>('[data-role="sample-editor-host"]'),
+      songTitle: selectRole<HTMLElement>('song-title'),
+      metricPosition: selectRole<HTMLElement>('metric-position'),
+      metricPattern: selectRole<HTMLElement>('metric-pattern'),
+      metricLength: selectRole<HTMLElement>('metric-length'),
+      metricBpm: selectRole<HTMLElement>('metric-bpm'),
+      metricTime: selectRole<HTMLElement>('metric-time'),
+      metricSize: selectRole<HTMLElement>('metric-size'),
+      octaveValue: selectRole<HTMLElement>('octave-value'),
+      visualizationLabel: selectRole<HTMLElement>('visualization-label'),
+      samplePageLabel: selectRole<HTMLElement>('sample-page-label'),
+      samplePagePrevButton: selectActionButton('sample-page-prev'),
+      samplePageNextButton: selectActionButton('sample-page-next'),
+      sampleBank: selectRole<HTMLElement>('sample-bank'),
+      sampleDetailContent: selectRole<HTMLElement>('sample-detail-content'),
+      selectedSampleTitle: selectRole<HTMLElement>('selected-sample-title'),
+      selectedSampleHint: selectRole<HTMLElement>('selected-sample-hint'),
+      trackMuteButtons,
+      trackMuteLabels: trackMuteButtons.map((button) => button?.closest('.track-label') as HTMLElement | null),
+      transportToggle: selectRole<HTMLButtonElement>('module-transport-toggle'),
+      transportMode: selectRole<HTMLButtonElement>('module-transport-mode'),
+      transportModeValue: shell.querySelector<HTMLElement>('[data-role="module-transport-mode"] .tool-icon-button__value'),
+      audioMode: selectRole<HTMLButtonElement>('module-audio-mode'),
+      songStepperButtons: [
+        'song-position-down',
+        'song-position-up',
+        'song-pattern-down',
+        'song-pattern-up',
+        'song-length-down',
+        'song-length-up',
+        'song-bpm-down',
+        'song-bpm-up',
+      ].flatMap((action) => {
+        const button = selectActionButton(action);
+        return button ? [button] : [];
+      }),
+      octaveButtons: {
+        '1': selectActionButton('octave-set-1'),
+        '2': selectActionButton('octave-set-2'),
+      },
+      samplePreviewToggle: selectRole<HTMLButtonElement>('sample-preview-toggle'),
+      sampleLoadSelected: selectActionButton('sample-load-selected'),
+      sampleEditorPreviewToggle: selectRole<HTMLButtonElement>('sample-editor-preview-toggle'),
+      sampleEditorShowSelection: selectActionButton('sample-editor-show-selection'),
+      sampleEditorCrop: selectActionButton('sample-editor-crop'),
+      sampleEditorCut: selectActionButton('sample-editor-cut'),
+      sampleEditorLoopToggle: selectActionButton('sample-editor-toggle-loop'),
+      sampleEditorVolumeButton: selectActionButton('sample-editor-open-volume'),
+      sampleEditorVolumeValue: shell.querySelector<HTMLElement>('[data-action="sample-editor-open-volume"] .tool-icon-button__value'),
+      sampleEditorFineTuneButton: selectActionButton('sample-editor-open-finetune'),
+      sampleEditorFineTuneValue: shell.querySelector<HTMLElement>('[data-action="sample-editor-open-finetune"] .tool-icon-button__value'),
+      sampleEditorLength: selectRole<HTMLElement>('sample-editor-length'),
+      sampleEditorVolumeDisplay: selectRole<HTMLElement>('sample-editor-volume-display'),
+      sampleEditorFineTuneDisplay: selectRole<HTMLElement>('sample-editor-finetune-display'),
+      sampleEditorScroll: shell.querySelector<HTMLInputElement>('[data-input="sample-editor-scroll"]'),
+      sampleEditorVisible: selectRole<HTMLElement>('sample-editor-visible'),
+      sampleEditorLoop: selectRole<HTMLElement>('sample-editor-loop'),
+      sampleVolumeInputs: Array.from(shell.querySelectorAll<HTMLInputElement>('[data-input="sample-volume"]')),
+      sampleFineTuneInputs: Array.from(shell.querySelectorAll<HTMLInputElement>('[data-input="sample-finetune"]')),
+    };
+  }
+
+  private setElementText(element: HTMLElement | null, value: string): void {
+    if (element && element.textContent !== value) {
+      element.textContent = value;
+    }
+  }
+
+  private setElementHtml(element: HTMLElement | null, value: string): void {
+    if (element && element.innerHTML !== value) {
+      element.innerHTML = value;
+    }
+  }
+
+  private syncInputNodeValues(inputs: HTMLInputElement[], value: string): void {
+    for (const input of inputs) {
+      if (input.value !== value) {
+        input.value = value;
+      }
+    }
   }
 
   private renderToolbarButton(action: string, iconNode: unknown, label: string, active = false): string {
@@ -559,6 +706,30 @@ export class TrackerApplication {
 
   private getDisplaySongTitle(snapshot: TrackerSnapshot): string {
     return (snapshot.song.title || 'UNTITLED').toUpperCase();
+  }
+
+  private getAudioModeLabel(snapshot: TrackerSnapshot): string {
+    if (snapshot.audio.mode === 'mono') {
+      return 'Mono playback';
+    }
+
+    if (snapshot.audio.mode === 'amiga') {
+      return 'Amiga stereo playback';
+    }
+
+    return 'Custom panning playback';
+  }
+
+  private getAudioModeValue(snapshot: TrackerSnapshot): 'C' | 'M' | 'A' {
+    if (snapshot.audio.mode === 'mono') {
+      return 'M';
+    }
+
+    if (snapshot.audio.mode === 'amiga') {
+      return 'A';
+    }
+
+    return 'C';
   }
 
   private getDisplaySampleTitle(snapshot: TrackerSnapshot): string {
@@ -838,8 +1009,6 @@ export class TrackerApplication {
           ? { volume: clamp(Math.round(numeric), 0, 64) }
           : { fineTune: clamp(Math.round(numeric), -8, 7) },
       });
-      this.snapshot = this.engine.getSnapshot();
-      this.refreshSelectedSampleWaveform(this.snapshot, true);
       this.updateModernLiveRegions(this.snapshot);
     }
 
@@ -869,7 +1038,7 @@ export class TrackerApplication {
   }
 
   private mountVisualization(snapshot: TrackerSnapshot): void {
-    const host = this.root.querySelector<HTMLElement>('[data-role="visualization-host"]');
+    const host = this.domRefs?.visualizationHost ?? null;
     if (!host) {
       return;
     }
@@ -883,27 +1052,24 @@ export class TrackerApplication {
       return slot;
     };
 
-    if (this.visualizationMode === 'split') {
+    const shouldRemount = this.mountedVisualizationMode !== this.visualizationMode || host.childElementCount === 0;
+    if (shouldRemount && this.visualizationMode === 'split') {
       host.replaceChildren(
         createSlot(this.quadrascopeCanvas, 'visualization-slot--scope'),
         createSlot(this.spectrumCanvas, 'visualization-slot--spectrum'),
       );
-    } else if (this.visualizationMode === 'piano') {
+    } else if (shouldRemount && this.visualizationMode === 'piano') {
       host.replaceChildren(createSlot(this.pianoCanvas, 'visualization-slot--piano'));
-    } else if (this.visualizationMode === 'spectrum') {
+    } else if (shouldRemount && this.visualizationMode === 'spectrum') {
       host.replaceChildren(createSlot(this.spectrumCanvas, 'visualization-slot--spectrum'));
-    } else if (this.visualizationMode === 'signal-trails') {
+    } else if (shouldRemount && this.visualizationMode === 'signal-trails') {
       host.replaceChildren(createSlot(this.trailsCanvas, 'visualization-slot--trails'));
-    } else {
+    } else if (shouldRemount) {
       host.replaceChildren(createSlot(this.quadrascopeCanvas, 'visualization-slot--scope'));
     }
 
+    this.mountedVisualizationMode = this.visualizationMode;
     this.drawVisualization(snapshot);
-    window.requestAnimationFrame(() => {
-      if (this.snapshot === snapshot && this.viewMode === 'modern') {
-        this.drawVisualization(snapshot);
-      }
-    });
   }
 
   private drawVisualization(snapshot: TrackerSnapshot): void {
@@ -932,43 +1098,131 @@ export class TrackerApplication {
     }
   }
 
-  private getSampleWaveformKey(snapshot: TrackerSnapshot): string {
-    const sample = snapshot.samples[snapshot.selectedSample];
-    const previewKey = (sample.preview ?? []).slice(0, 8).join(',');
-    return `${snapshot.selectedSample}:${sample.length}:${previewKey}`;
+  private needsLiveQuadrascope(): boolean {
+    return this.visualizationMode !== 'piano';
+  }
+
+  private applyLiveState(liveState: TrackerLiveState): boolean {
+    if (!this.snapshot) {
+      return false;
+    }
+
+    if (this.lastAppliedLiveStateVersion === liveState.version) {
+      return false;
+    }
+
+    this.lastAppliedLiveStateVersion = liveState.version;
+    const snapshot = this.snapshot;
+    snapshot.audio.mode = liveState.audioMode;
+    snapshot.audio.stereo = liveState.stereo;
+    snapshot.transport.playing = liveState.playing;
+    snapshot.transport.mode = liveState.mode;
+    snapshot.transport.bpm = liveState.bpm;
+    snapshot.transport.speed = liveState.speed;
+    snapshot.transport.elapsedSeconds = liveState.elapsedSeconds;
+    snapshot.transport.row = liveState.row;
+    snapshot.transport.pattern = liveState.pattern;
+    snapshot.transport.position = liveState.position;
+    snapshot.song.currentPattern = liveState.pattern;
+    snapshot.song.currentPosition = liveState.position;
+    snapshot.pattern.index = liveState.pattern;
+
+    for (let channel = 0; channel < 4; channel += 1) {
+      snapshot.editor.muted[channel] = ((liveState.mutedMask >> channel) & 1) !== 0;
+    }
+
+    return true;
+  }
+
+  private buildSamplePreview(data: Int8Array): Int8Array {
+    if (data.length === 0) {
+      return new Int8Array(0);
+    }
+
+    const preview = new Int8Array(256);
+    for (let index = 0; index < preview.length; index += 1) {
+      const start = Math.floor((index * data.length) / preview.length);
+      const end = Math.max(start + 1, Math.floor(((index + 1) * data.length) / preview.length));
+      let peak = 0;
+
+      for (let sampleIndex = start; sampleIndex < end && sampleIndex < data.length; sampleIndex += 1) {
+        const sample = data[sampleIndex] ?? 0;
+        if (Math.abs(sample) >= Math.abs(peak)) {
+          peak = sample;
+        }
+      }
+
+      preview[index] = peak;
+    }
+
+    return preview;
+  }
+
+  private invalidateAllSampleCaches(): void {
+    this.samplePreviewCache.clear();
+    this.sampleWaveformCache.clear();
+  }
+
+  private invalidateSampleCache(sample: number): void {
+    this.samplePreviewCache.delete(sample);
+    this.sampleWaveformCache.delete(sample);
+  }
+
+  private ensureSampleWaveformEntry(sample: SampleSlot, force = false): SampleCacheEntry {
+    const cached = this.sampleWaveformCache.get(sample.index);
+    if (!force && cached && cached.revision === sample.dataRevision) {
+      return cached;
+    }
+
+    let data = new Int8Array(0);
+    if (sample.length > 0 && this.engine) {
+      try {
+        const waveform = this.engine.getSampleWaveform(sample.index);
+        data = waveform ? new Int8Array(waveform) : new Int8Array(0);
+      } catch {
+        data = new Int8Array(0);
+      }
+    }
+
+    const entry = { revision: sample.dataRevision, data };
+    this.sampleWaveformCache.set(sample.index, entry);
+    this.samplePreviewCache.set(sample.index, {
+      revision: sample.dataRevision,
+      data: this.buildSamplePreview(data),
+    });
+    return entry;
+  }
+
+  private ensureSamplePreviewEntry(sample: SampleSlot): SampleCacheEntry {
+    const cached = this.samplePreviewCache.get(sample.index);
+    if (cached && cached.revision === sample.dataRevision) {
+      return cached;
+    }
+
+    const waveform = this.ensureSampleWaveformEntry(sample);
+    const preview = {
+      revision: sample.dataRevision,
+      data: this.buildSamplePreview(waveform.data),
+    };
+    this.samplePreviewCache.set(sample.index, preview);
+    return preview;
   }
 
   private refreshSelectedSampleWaveform(snapshot: TrackerSnapshot, force = false): void {
-    if (!this.engine) {
-      return;
-    }
-
     const sample = snapshot.samples[snapshot.selectedSample];
-    const key = this.getSampleWaveformKey(snapshot);
-    if (!force && this.sampleWaveformKey === key && this.sampleWaveform && this.sampleWaveform.length > 0) {
+    if (!sample) {
       return;
     }
 
-    try {
-      this.sampleWaveform = this.engine.getSampleWaveform(snapshot.selectedSample);
-    } catch {
-      this.sampleWaveform = null;
-    }
-
-    if (this.sampleWaveform && this.sampleWaveform.length > 0) {
-      this.sampleWaveformKey = key;
-      return;
-    }
-
-    this.sampleWaveformKey = null;
+    this.ensureSampleWaveformEntry(sample, force);
   }
 
   private getWaveformSource(sample: SampleSlot): Int8Array {
-    if (this.sampleWaveform && this.sampleWaveform.length > 0) {
-      return this.sampleWaveform;
-    }
+    return this.ensureSampleWaveformEntry(sample).data;
+  }
 
-    return Int8Array.from(sample.preview ?? []);
+  private getPreviewSource(sample: SampleSlot): Int8Array {
+    return this.ensureSamplePreviewEntry(sample).data;
   }
 
   private drawSelectedSamplePreview(snapshot: TrackerSnapshot): void {
@@ -976,7 +1230,6 @@ export class TrackerApplication {
       return;
     }
 
-    this.refreshSelectedSampleWaveform(snapshot);
     drawModernSelectedSamplePreview({
       canvas: this.samplePreviewCanvas,
       snapshot,
@@ -992,7 +1245,6 @@ export class TrackerApplication {
       return;
     }
 
-    this.refreshSelectedSampleWaveform(snapshot);
     drawModernSampleEditor({
       canvas: this.sampleEditorCanvas,
       snapshot,
@@ -1059,19 +1311,46 @@ export class TrackerApplication {
     };
   }
 
-  private ensureScopeAnimation(): void {
-    if (this.scopeFrame !== null) {
+  private ensurePlaybackCoordinator(): void {
+    if (this.playbackFrame !== null) {
       return;
     }
 
-    const tick = (): void => {
-      this.scopeFrame = window.requestAnimationFrame(tick);
-      if (!this.snapshot || this.viewMode !== 'modern') {
+    const tick = (now: number): void => {
+      this.playbackFrame = window.requestAnimationFrame(tick);
+      if (!this.snapshot || !this.engine) {
         return;
       }
 
       this.syncSamplePreviewSession(this.snapshot);
-      if (this.engine) {
+      const liveCadenceMs = this.viewMode === 'classic' ? 50 : 0;
+      const shouldSyncLiveState = this.snapshot.transport.playing || this.viewMode === 'classic';
+      if (
+        shouldSyncLiveState
+        && (liveCadenceMs === 0 || this.lastPlaybackCoordinatorAt === null || now - this.lastPlaybackCoordinatorAt >= liveCadenceMs)
+      ) {
+        this.lastPlaybackCoordinatorAt = now;
+        const liveState = this.engine.getLiveState();
+        if (liveState && liveState.version !== this.lastLiveStateVersion) {
+          const previousPattern = this.snapshot.pattern.index;
+          this.lastLiveStateVersion = liveState.version;
+          if (liveState.pattern !== previousPattern) {
+            this.snapshot = this.engine.getSnapshot();
+            this.lastAppliedLiveStateVersion = liveState.version;
+            if (this.viewMode === 'modern') {
+              this.updateModernLiveRegions(this.snapshot);
+            }
+          } else if (this.applyLiveState(liveState) && this.viewMode === 'modern') {
+            this.updateModernLiveRegions(this.snapshot);
+          }
+        }
+      }
+
+      if (this.viewMode !== 'modern') {
+        return;
+      }
+
+      if (this.needsLiveQuadrascope()) {
         this.quadrascope = this.engine.getQuadrascope() ?? this.quadrascope;
       }
 
@@ -1079,10 +1358,12 @@ export class TrackerApplication {
         this.drawSelectedSamplePreview(this.snapshot);
         this.drawSampleEditor(this.snapshot);
       }
-      this.drawVisualization(this.snapshot);
+      if (this.snapshot.transport.playing || this.visualizationMode === 'piano' || this.visualizationMode === 'signal-trails') {
+        this.drawVisualization(this.snapshot);
+      }
     };
 
-    this.scopeFrame = window.requestAnimationFrame(tick);
+    this.playbackFrame = window.requestAnimationFrame(tick);
   }
 
   private drawQuadrascopeStack(quadrascope: QuadrascopeState | null): void {
@@ -1173,7 +1454,7 @@ export class TrackerApplication {
       return;
     }
 
-    const host = this.root.querySelector<HTMLElement>('[data-role="pattern-host"]');
+    const host = this.domRefs?.patternHost ?? null;
     if (!host) {
       return;
     }
@@ -1283,7 +1564,12 @@ export class TrackerApplication {
   }
 
   private renderSampleBank(snapshot: TrackerSnapshot, samplePage: number): string {
-    return renderModernSampleBank(snapshot, samplePage, SAMPLE_PAGE_SIZE);
+    return renderModernSampleBank(
+      snapshot,
+      samplePage,
+      SAMPLE_PAGE_SIZE,
+      (sample) => this.getPreviewSource(sample),
+    );
   }
 
   private getSampleEditorZoomAnchor(): number {
@@ -1429,6 +1715,8 @@ export class TrackerApplication {
       getSampleEditorView: (snapshot) => this.getSampleEditorView(snapshot),
       getSampleEditorZoomAnchor: () => this.getSampleEditorZoomAnchor(),
       getSamplePageCount: (snapshot) => this.getSamplePageCount(snapshot),
+      invalidateAllSampleCaches: () => this.invalidateAllSampleCaches(),
+      invalidateSampleCache: (sample) => this.invalidateSampleCache(sample),
       refreshSelectedSampleWaveform: (snapshot, force) => this.refreshSelectedSampleWaveform(snapshot, force),
       releaseClassicKeys: () => this.releaseClassicKeys(),
       render: () => this.render(),
@@ -1474,12 +1762,14 @@ export class TrackerApplication {
     }
 
     if (event.target === this.moduleInput) {
+      this.invalidateAllSampleCaches();
       await loadModuleFromInput(this.engine, this.moduleInput);
       this.stopSamplePreviewSession(false);
       return;
     }
 
     if (event.target === this.sampleInput) {
+      this.invalidateAllSampleCaches();
       await loadSampleFromInput({
         engine: this.engine,
         input: this.sampleInput,
@@ -1533,6 +1823,7 @@ export class TrackerApplication {
       snapshot: this.snapshot,
       canEditSnapshot: (snapshot) => this.canEditSnapshot(snapshot),
       getSampleEditorView: (snapshot) => this.getSampleEditorView(snapshot),
+      invalidateSampleCache: (sample) => this.invalidateSampleCache(sample),
       refreshSelectedSampleWaveform: (snapshot, force) => this.refreshSelectedSampleWaveform(snapshot, force),
       setSuppressNextModernRender: (value) => { this.suppressNextModernRender = value; },
       setSampleEditorViewOverride: (value) => { this.sampleEditorViewOverride = value; },
@@ -1740,7 +2031,6 @@ export class TrackerApplication {
         }
         this.engine.setTransport(outcome.transport);
       }
-      this.snapshot = this.engine.getSnapshot();
       this.updateModernLiveRegions(this.snapshot);
     }
 
@@ -1846,210 +2136,191 @@ export class TrackerApplication {
     });
   }
 
-  private syncSnapshotPolling(): void {
-    const shouldPoll = Boolean(
-      this.engine &&
-      this.snapshot &&
-      (
-        this.viewMode === 'classic' ||
-        this.snapshot.transport.playing
-      ),
-    );
-    const targetIntervalMs = this.viewMode === 'classic' ? 50 : 33;
-
-    if (!shouldPoll) {
-      if (this.snapshotPollTimer !== null) {
-        window.clearInterval(this.snapshotPollTimer);
-        this.snapshotPollTimer = null;
-      }
-      this.snapshotPollIntervalMs = null;
-      return;
-    }
-
-    if (this.snapshotPollTimer !== null && this.snapshotPollIntervalMs === targetIntervalMs) {
-      return;
-    }
-
-    if (this.snapshotPollTimer !== null) {
-      window.clearInterval(this.snapshotPollTimer);
-      this.snapshotPollTimer = null;
-    }
-
-    this.snapshotPollIntervalMs = targetIntervalMs;
-    this.snapshotPollTimer = window.setInterval(() => {
-      if (!this.engine || !this.snapshot) {
-        return;
-      }
-
-      this.snapshot = this.engine.getSnapshot();
-      if (this.viewMode === 'classic') {
-        this.updateClassicDebugPanel(this.snapshot);
-        return;
-      }
-
-      this.updateModernLiveRegions(this.snapshot);
-    }, targetIntervalMs);
-  }
-
   private updateModernLiveRegions(snapshot: TrackerSnapshot): void {
-    if (this.viewMode !== 'modern') {
+    if (this.viewMode !== 'modern' || !this.domRefs) {
       return;
     }
 
-    this.refreshSelectedSampleWaveform(snapshot);
+    let refs = this.domRefs;
     if (this.renameState?.kind !== 'song') {
-      this.setLiveHtml('song-title', this.renderSongTitleHtml(snapshot));
+      this.setElementHtml(refs.songTitle, this.renderSongTitleHtml(snapshot));
     }
-    this.setLiveText('metric-position', String(snapshot.transport.position).padStart(2, '0'));
-    this.setLiveText('metric-pattern', String(snapshot.pattern.index).padStart(2, '0'));
-    this.setLiveText('metric-length', String(snapshot.song.length).padStart(2, '0'));
-    this.setLiveText('metric-bpm', String(snapshot.transport.bpm));
-    this.setLiveText('metric-time', formatSongTime(snapshot));
-    this.setLiveText('metric-size', `${snapshot.song.sizeBytes} bytes`);
-    this.setLiveText('octave-value', `Octave ${this.keyboardOctave}`);
-    this.setLiveText('visualization-label', getVisualizationLabel(this.visualizationMode));
+    this.setElementText(refs.metricPosition, String(snapshot.transport.position).padStart(2, '0'));
+    this.setElementText(refs.metricPattern, String(snapshot.pattern.index).padStart(2, '0'));
+    this.setElementText(refs.metricLength, String(snapshot.song.length).padStart(2, '0'));
+    this.setElementText(refs.metricBpm, String(snapshot.transport.bpm));
+    this.setElementText(refs.metricTime, formatSongTime(snapshot));
+    this.setElementText(refs.metricSize, `${snapshot.song.sizeBytes} bytes`);
+    this.setElementText(refs.octaveValue, `Octave ${this.keyboardOctave}`);
+    this.setElementText(refs.visualizationLabel, getVisualizationLabel(this.visualizationMode));
     this.updateSamplePanel(snapshot);
+    refs = this.domRefs ?? refs;
     this.updateTrackMuteButtons(snapshot);
 
     const playbackMode = snapshot.transport.playing ? snapshot.transport.mode : this.preferredTransportMode;
-    const transportToggle = this.root.querySelector<HTMLButtonElement>('[data-role="module-transport-toggle"]');
+    const transportToggle = refs.transportToggle;
     if (transportToggle) {
+      const label = snapshot.transport.playing ? 'Pause playback' : (playbackMode === 'pattern' ? 'Play pattern' : 'Play module');
       transportToggle.disabled = false;
       transportToggle.classList.toggle('is-active', snapshot.transport.playing);
       transportToggle.dataset.action = 'transport-toggle';
-      transportToggle.title = snapshot.transport.playing ? 'Pause playback' : (playbackMode === 'pattern' ? 'Play pattern' : 'Play module');
-      transportToggle.setAttribute('aria-label', transportToggle.title);
-      transportToggle.innerHTML = `${iconMarkup(snapshot.transport.playing ? Pause : Play)}<span class="sr-only">${transportToggle.title}</span>`;
+      if (transportToggle.title !== label) {
+        transportToggle.title = label;
+        transportToggle.setAttribute('aria-label', label);
+      }
+      const nextToggleState = `${snapshot.transport.playing}:${playbackMode}`;
+      if (transportToggle.dataset.toggleState !== nextToggleState) {
+        transportToggle.dataset.toggleState = nextToggleState;
+        transportToggle.innerHTML = `${iconMarkup(snapshot.transport.playing ? Pause : Play)}<span class="sr-only">${label}</span>`;
+      }
     }
 
-    const transportMode = this.root.querySelector<HTMLButtonElement>('[data-role="module-transport-mode"]');
+    const transportMode = refs.transportMode;
     if (transportMode) {
+      const label = playbackMode === 'pattern' ? 'Pattern playback' : 'Module playback';
       transportMode.classList.toggle('is-active', playbackMode === 'pattern');
-      transportMode.title = playbackMode === 'pattern' ? 'Pattern playback' : 'Module playback';
-      transportMode.setAttribute('aria-label', transportMode.title);
-      const modeValue = transportMode.querySelector<HTMLElement>('.tool-icon-button__value');
+      if (transportMode.title !== label) {
+        transportMode.title = label;
+        transportMode.setAttribute('aria-label', label);
+      }
+      const modeValue = refs.transportModeValue;
       if (modeValue) {
         modeValue.textContent = playbackMode === 'pattern' ? 'P' : 'M';
       }
     }
 
-    const audioMode = this.root.querySelector<HTMLButtonElement>('[data-role="module-audio-mode"]');
+    const audioMode = refs.audioMode;
     if (audioMode) {
-      audioMode.classList.toggle('is-active', !snapshot.audio.stereo);
-      audioMode.title = snapshot.audio.stereo ? 'Stereo playback' : 'Mono playback';
-      audioMode.setAttribute('aria-label', audioMode.title);
-      audioMode.innerHTML = `${iconMarkup(Volume2)}<span class="tool-icon-button__value" aria-hidden="true">${snapshot.audio.stereo ? 'S' : 'M'}</span><span class="sr-only">${audioMode.title}</span>`;
-    }
-
-    for (const action of [
-      'song-position-down',
-      'song-position-up',
-      'song-pattern-down',
-      'song-pattern-up',
-      'song-length-down',
-      'song-length-up',
-      'song-bpm-down',
-      'song-bpm-up',
-    ]) {
-      const button = this.root.querySelector<HTMLButtonElement>(`[data-action="${action}"]`);
-      if (button) {
-        button.disabled = !this.canEditSnapshot(snapshot);
+      const label = this.getAudioModeLabel(snapshot);
+      audioMode.classList.toggle('is-active', snapshot.audio.mode !== 'custom');
+      if (audioMode.title !== label) {
+        audioMode.title = label;
+        audioMode.setAttribute('aria-label', label);
+      }
+      const nextAudioState = snapshot.audio.mode;
+      if (audioMode.dataset.audioState !== nextAudioState) {
+        audioMode.dataset.audioState = nextAudioState;
+        audioMode.innerHTML = `${iconMarkup(Volume2)}<span class="tool-icon-button__value" aria-hidden="true">${this.getAudioModeValue(snapshot)}</span><span class="sr-only">${label}</span>`;
       }
     }
 
-    for (const [action, active] of [['octave-set-1', this.keyboardOctave === 1], ['octave-set-2', this.keyboardOctave === 2]] as const) {
-      const button = this.root.querySelector<HTMLButtonElement>(`[data-action="${action}"]`);
+    const canEdit = this.canEditSnapshot(snapshot);
+    for (const button of refs.songStepperButtons) {
+      button.disabled = !canEdit;
+    }
+
+    for (const [octaveKey, active] of [['1', this.keyboardOctave === 1], ['2', this.keyboardOctave === 2]] as const) {
+      const button = refs.octaveButtons[octaveKey];
       if (button) {
         button.classList.toggle('is-active', active);
         button.setAttribute('aria-pressed', active ? 'true' : 'false');
       }
     }
 
-    const samplePreviewToggle = this.root.querySelector<HTMLButtonElement>('[data-role="sample-preview-toggle"]');
+    const samplePreviewToggle = refs.samplePreviewToggle;
     if (samplePreviewToggle) {
-      samplePreviewToggle.disabled = snapshot.samples[snapshot.selectedSample]?.length <= 0;
-      samplePreviewToggle.dataset.action = this.samplePreviewPlaying ? 'sample-preview-stop' : 'sample-preview-play';
-      samplePreviewToggle.innerHTML = `${iconMarkup(this.samplePreviewPlaying ? Square : Play)}<span class="sr-only">${this.samplePreviewPlaying ? 'Stop preview' : 'Play preview'}</span>`;
+      const disabled = snapshot.samples[snapshot.selectedSample]?.length <= 0;
+      const action = this.samplePreviewPlaying ? 'sample-preview-stop' : 'sample-preview-play';
+      const label = this.samplePreviewPlaying ? 'Stop preview' : 'Play preview';
+      samplePreviewToggle.disabled = disabled;
+      samplePreviewToggle.dataset.action = action;
+      if (samplePreviewToggle.dataset.previewState !== `${action}:${disabled}`) {
+        samplePreviewToggle.dataset.previewState = `${action}:${disabled}`;
+        samplePreviewToggle.innerHTML = `${iconMarkup(this.samplePreviewPlaying ? Square : Play)}<span class="sr-only">${label}</span>`;
+      }
     }
 
-    const sampleLoadSelected = this.root.querySelector<HTMLButtonElement>('[data-action="sample-load-selected"]');
+    const sampleLoadSelected = refs.sampleLoadSelected;
     if (sampleLoadSelected) {
-      sampleLoadSelected.disabled = !this.canEditSnapshot(snapshot);
-      sampleLoadSelected.title = snapshot.samples[snapshot.selectedSample]?.length > 0 ? 'Replace sample' : 'Load sample';
-      sampleLoadSelected.setAttribute('aria-label', sampleLoadSelected.title);
+      const label = snapshot.samples[snapshot.selectedSample]?.length > 0 ? 'Replace sample' : 'Load sample';
+      sampleLoadSelected.disabled = !canEdit;
+      if (sampleLoadSelected.title !== label) {
+        sampleLoadSelected.title = label;
+        sampleLoadSelected.setAttribute('aria-label', label);
+      }
     }
 
-    const sampleEditorPreviewToggle = this.root.querySelector<HTMLButtonElement>('[data-role="sample-editor-preview-toggle"]');
+    const sampleEditorPreviewToggle = refs.sampleEditorPreviewToggle;
     if (sampleEditorPreviewToggle) {
-      sampleEditorPreviewToggle.disabled = snapshot.samples[snapshot.selectedSample]?.length <= 0;
-      sampleEditorPreviewToggle.dataset.action = this.samplePreviewPlaying ? 'sample-editor-stop' : 'sample-editor-preview';
-      sampleEditorPreviewToggle.innerHTML = `${iconMarkup(this.samplePreviewPlaying ? Square : Play)}<span class="sr-only">${this.samplePreviewPlaying ? 'Stop preview' : 'Play preview'}</span>`;
+      const disabled = snapshot.samples[snapshot.selectedSample]?.length <= 0;
+      const action = this.samplePreviewPlaying ? 'sample-editor-stop' : 'sample-editor-preview';
+      const label = this.samplePreviewPlaying ? 'Stop preview' : 'Play preview';
+      sampleEditorPreviewToggle.disabled = disabled;
+      sampleEditorPreviewToggle.dataset.action = action;
+      if (sampleEditorPreviewToggle.dataset.previewState !== `${action}:${disabled}`) {
+        sampleEditorPreviewToggle.dataset.previewState = `${action}:${disabled}`;
+        sampleEditorPreviewToggle.innerHTML = `${iconMarkup(this.samplePreviewPlaying ? Square : Play)}<span class="sr-only">${label}</span>`;
+      }
     }
 
     const hasSampleSelection = snapshot.sampleEditor.selectionStart !== null
       && snapshot.sampleEditor.selectionEnd !== null
       && snapshot.sampleEditor.selectionEnd - snapshot.sampleEditor.selectionStart >= 2;
 
-    const sampleEditorShowSelectionButton = this.root.querySelector<HTMLButtonElement>('[data-action="sample-editor-show-selection"]');
+    const sampleEditorShowSelectionButton = refs.sampleEditorShowSelection;
     if (sampleEditorShowSelectionButton) {
       sampleEditorShowSelectionButton.disabled = !hasSampleSelection;
     }
 
-    const sampleEditorCropButton = this.root.querySelector<HTMLButtonElement>('[data-action="sample-editor-crop"]');
+    const sampleEditorCropButton = refs.sampleEditorCrop;
     if (sampleEditorCropButton) {
-      sampleEditorCropButton.disabled = !this.canEditSnapshot(snapshot) || !hasSampleSelection;
+      sampleEditorCropButton.disabled = !canEdit || !hasSampleSelection;
     }
 
-    const sampleEditorCutButton = this.root.querySelector<HTMLButtonElement>('[data-action="sample-editor-cut"]');
+    const sampleEditorCutButton = refs.sampleEditorCut;
     if (sampleEditorCutButton) {
-      sampleEditorCutButton.disabled = !this.canEditSnapshot(snapshot) || !hasSampleSelection;
+      sampleEditorCutButton.disabled = !canEdit || !hasSampleSelection;
     }
     const loopEnabled = snapshot.samples[snapshot.selectedSample].loopLength > 2 && snapshot.samples[snapshot.selectedSample].length > 2;
-    const sampleEditorLoopToggle = this.root.querySelector<HTMLButtonElement>('[data-action="sample-editor-toggle-loop"]');
+    const sampleEditorLoopToggle = refs.sampleEditorLoopToggle;
     if (sampleEditorLoopToggle) {
-      sampleEditorLoopToggle.disabled = !this.canEditSnapshot(snapshot) || snapshot.samples[snapshot.selectedSample].length <= 1;
+      sampleEditorLoopToggle.disabled = !canEdit || snapshot.samples[snapshot.selectedSample].length <= 1;
       sampleEditorLoopToggle.classList.toggle('is-active', loopEnabled);
       sampleEditorLoopToggle.setAttribute('aria-pressed', loopEnabled ? 'true' : 'false');
     }
 
     const sample = snapshot.samples[snapshot.selectedSample];
-    const sampleEditorVolumeButton = this.root.querySelector<HTMLButtonElement>('[data-action="sample-editor-open-volume"]');
+    const sampleEditorVolumeButton = refs.sampleEditorVolumeButton;
     if (sampleEditorVolumeButton) {
-      sampleEditorVolumeButton.disabled = !this.canEditSnapshot(snapshot) || sample.length <= 0;
+      sampleEditorVolumeButton.disabled = !canEdit || sample.length <= 0;
       sampleEditorVolumeButton.classList.toggle('is-active', this.openSampleEditorPopover === 'volume');
-      sampleEditorVolumeButton.title = `Volume ${sample.volume}`;
-      sampleEditorVolumeButton.setAttribute('aria-label', `Volume ${sample.volume}`);
-      const volumeValue = sampleEditorVolumeButton.querySelector<HTMLElement>('.tool-icon-button__value');
-      if (volumeValue) {
-        volumeValue.textContent = String(sample.volume);
+      const label = `Volume ${sample.volume}`;
+      if (sampleEditorVolumeButton.title !== label) {
+        sampleEditorVolumeButton.title = label;
+        sampleEditorVolumeButton.setAttribute('aria-label', label);
+      }
+      if (refs.sampleEditorVolumeValue) {
+        refs.sampleEditorVolumeValue.textContent = String(sample.volume);
       }
     }
 
-    const sampleEditorFineTuneButton = this.root.querySelector<HTMLButtonElement>('[data-action="sample-editor-open-finetune"]');
+    const sampleEditorFineTuneButton = refs.sampleEditorFineTuneButton;
     if (sampleEditorFineTuneButton) {
       const fineTuneText = this.formatFineTuneValue(sample.fineTune);
-      sampleEditorFineTuneButton.disabled = !this.canEditSnapshot(snapshot) || sample.length <= 0;
+      sampleEditorFineTuneButton.disabled = !canEdit || sample.length <= 0;
       sampleEditorFineTuneButton.classList.toggle('is-active', this.openSampleEditorPopover === 'fineTune');
-      sampleEditorFineTuneButton.title = `Fine tune ${fineTuneText}`;
-      sampleEditorFineTuneButton.setAttribute('aria-label', `Fine tune ${fineTuneText}`);
-      const fineTuneValue = sampleEditorFineTuneButton.querySelector<HTMLElement>('.tool-icon-button__value');
-      if (fineTuneValue) {
-        fineTuneValue.textContent = fineTuneText;
+      const label = `Fine tune ${fineTuneText}`;
+      if (sampleEditorFineTuneButton.title !== label) {
+        sampleEditorFineTuneButton.title = label;
+        sampleEditorFineTuneButton.setAttribute('aria-label', label);
+      }
+      if (refs.sampleEditorFineTuneValue) {
+        refs.sampleEditorFineTuneValue.textContent = fineTuneText;
       }
     }
 
-    this.setLiveText('sample-editor-length', String(sample.length));
+    this.setElementText(refs.sampleEditorLength, String(sample.length));
     if (this.sampleEditorNumberEdit?.field !== 'volume') {
-      this.setLiveText('sample-editor-volume-display', String(sample.volume));
+      this.setElementText(refs.sampleEditorVolumeDisplay, String(sample.volume));
     }
-    this.syncInputValues('sample-volume', String(sample.volume));
+    this.syncInputNodeValues(refs.sampleVolumeInputs, String(sample.volume));
     if (this.sampleEditorNumberEdit?.field !== 'fineTune') {
-      this.setLiveText('sample-editor-finetune-display', this.formatFineTuneValue(sample.fineTune));
+      this.setElementText(refs.sampleEditorFineTuneDisplay, this.formatFineTuneValue(sample.fineTune));
     }
-    this.syncInputValues('sample-finetune', String(sample.fineTune));
+    this.syncInputNodeValues(refs.sampleFineTuneInputs, String(sample.fineTune));
 
     const view = this.getSampleEditorView(snapshot);
-    const sampleEditorScroll = this.root.querySelector<HTMLInputElement>('[data-input="sample-editor-scroll"]');
+    const sampleEditorScroll = refs.sampleEditorScroll;
     if (sampleEditorScroll) {
       const max = Math.max(0, snapshot.sampleEditor.sampleLength - view.length);
       sampleEditorScroll.max = String(max);
@@ -2058,8 +2329,8 @@ export class TrackerApplication {
     }
     this.updateSampleEditorScrollbarThumb(snapshot.sampleEditor.sampleLength, view.length);
 
-    this.setLiveText('sample-editor-visible', `${view.start} - ${view.end}`);
-    this.setLiveText('sample-editor-loop', `${snapshot.sampleEditor.loopStart} - ${snapshot.sampleEditor.loopEnd}`);
+    this.setElementText(refs.sampleEditorVisible, `${view.start} - ${view.end}`);
+    this.setElementText(refs.sampleEditorLoop, `${snapshot.sampleEditor.loopStart} - ${snapshot.sampleEditor.loopEnd}`);
 
     if (snapshot.sampleEditor.open) {
       this.drawSampleEditor(snapshot);
@@ -2071,16 +2342,25 @@ export class TrackerApplication {
   }
 
   private updateTrackMuteButtons(snapshot: TrackerSnapshot): void {
+    if (!this.domRefs) {
+      return;
+    }
+
     updateModernTrackMuteButtons({
-      root: this.root,
+      refs: this.domRefs,
       snapshot,
       renderMuteIcon: (muted) => iconMarkup(muted ? VolumeX : Volume2),
     });
   }
 
   private updateSamplePanel(snapshot: TrackerSnapshot): void {
+    if (!this.domRefs) {
+      return;
+    }
+
+    const previousKey = this.samplePanelKey;
     this.samplePanelKey = updateModernSamplePanel({
-      root: this.root,
+      refs: this.domRefs,
       snapshot,
       samplePanelKey: this.samplePanelKey,
       samplePreviewCanvas: this.samplePreviewCanvas,
@@ -2094,29 +2374,14 @@ export class TrackerApplication {
       renderSelectedSampleTitle: (_sample) => this.renderSampleTitleHtml(snapshot),
       syncSelectedSampleTitle: this.renameState?.kind !== 'sample',
     });
-  }
 
-  private setLiveText(role: string, value: string): void {
-    setModernLiveText(this.root, role, value);
-  }
-
-  private setLiveHtml(role: string, value: string): void {
-    const element = this.root.querySelector<HTMLElement>(`[data-role="${role}"]`);
-    if (element) {
-      element.innerHTML = value;
-    }
-  }
-
-  private syncInputValues(inputKey: string, value: string): void {
-    for (const input of this.root.querySelectorAll<HTMLInputElement>(`[data-input="${inputKey}"]`)) {
-      if (input.value !== value) {
-        input.value = value;
-      }
+    if (previousKey !== this.samplePanelKey && this.domRefs.appShell) {
+      this.collectModernDomRefs(this.domRefs.appShell);
     }
   }
 
   private updateSampleEditorScrollbarThumb(sampleLength: number, viewLength: number): void {
-    const scrollbar = this.root.querySelector<HTMLInputElement>('[data-input="sample-editor-scroll"]');
+    const scrollbar = this.domRefs?.sampleEditorScroll ?? null;
     if (!scrollbar) {
       return;
     }
@@ -2244,7 +2509,6 @@ export class TrackerApplication {
     }
 
     this.snapshot = nextSnapshot;
-    this.refreshSelectedSampleWaveform(this.snapshot, true);
     this.updateModernLiveRegions(this.snapshot);
   }
 

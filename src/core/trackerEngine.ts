@@ -5,6 +5,7 @@ import type {
   QuadrascopeState,
   SampleExportFormat,
   TrackerCommand,
+  TrackerLiveState,
   TrackerSnapshot,
   TransportCommand,
 } from './trackerTypes';
@@ -25,6 +26,7 @@ export interface TrackerEngine {
   forwardClassicKeyUp(scancode: number, keycode: number, shift: boolean, ctrl: boolean, alt: boolean, meta: boolean): void;
   forwardClassicTextInput(text: string): void;
   getSnapshot(): TrackerSnapshot;
+  getLiveState(): TrackerLiveState | null;
   getQuadrascope(): QuadrascopeState | null;
   getSampleWaveform(sample: number): Int8Array | null;
   subscribe(listener: (event: EngineEvent) => void): () => void;

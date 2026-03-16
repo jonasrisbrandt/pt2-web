@@ -26,6 +26,8 @@ export interface ModernClickActionContext {
   getSampleEditorView: (snapshot: TrackerSnapshot) => { start: number; length: number; end: number };
   getSampleEditorZoomAnchor: () => number;
   getSamplePageCount: (snapshot: TrackerSnapshot) => number;
+  invalidateAllSampleCaches: () => void;
+  invalidateSampleCache: (sample: number) => void;
   refreshSelectedSampleWaveform: (snapshot: TrackerSnapshot, force?: boolean) => void;
   releaseClassicKeys: () => void;
   render: () => void;
@@ -60,6 +62,8 @@ export const handleModernClickAction = async ({
   getSampleEditorView,
   getSampleEditorZoomAnchor,
   getSamplePageCount,
+  invalidateAllSampleCaches,
+  invalidateSampleCache,
   refreshSelectedSampleWaveform,
   releaseClassicKeys,
   render,
@@ -82,6 +86,7 @@ export const handleModernClickAction = async ({
   switch (target.dataset.action) {
     case 'new-song':
       clearSampleEditorViewOverride();
+      invalidateAllSampleCaches();
       engine.dispatch({ type: 'song/new' });
       return true;
     case 'load-module':
@@ -118,10 +123,8 @@ export const handleModernClickAction = async ({
       }
       return true;
     }
-    case 'audio-toggle-stereo':
-      engine.dispatch({ type: 'audio/toggle-stereo' });
-      setSnapshot(engine.getSnapshot());
-      updateModernLiveRegions(engine.getSnapshot());
+    case 'audio-cycle-mode':
+      engine.dispatch({ type: 'audio/cycle-mode' });
       return true;
     case 'transport-play-song':
       setPreferredTransportMode('song');
@@ -269,6 +272,7 @@ export const handleModernClickAction = async ({
       clearSampleEditorViewOverride();
       engine.dispatch({ type: 'sample-editor/open', sample: snapshot.selectedSample });
       setSnapshot(engine.getSnapshot());
+      refreshSelectedSampleWaveform(engine.getSnapshot(), false);
       render();
       return true;
     case 'sample-editor-close':
@@ -352,29 +356,34 @@ export const handleModernClickAction = async ({
         });
       }
       setSnapshot(engine.getSnapshot());
-      refreshSelectedSampleWaveform(engine.getSnapshot(), true);
       updateModernLiveRegions(engine.getSnapshot());
       return true;
-    case 'sample-editor-crop':
+    case 'sample-editor-crop': {
       if (!canEditSnapshot(snapshot)) {
         return true;
       }
       clearSampleEditorViewOverride();
       engine.dispatch({ type: 'sample-editor/crop' });
-      setSnapshot(engine.getSnapshot());
-      refreshSelectedSampleWaveform(engine.getSnapshot(), true);
-      updateModernLiveRegions(engine.getSnapshot());
+      invalidateSampleCache(snapshot.selectedSample);
+      const nextSnapshot = engine.getSnapshot();
+      setSnapshot(nextSnapshot);
+      refreshSelectedSampleWaveform(nextSnapshot, true);
+      updateModernLiveRegions(nextSnapshot);
       return true;
-    case 'sample-editor-cut':
+    }
+    case 'sample-editor-cut': {
       if (!canEditSnapshot(snapshot)) {
         return true;
       }
       clearSampleEditorViewOverride();
       engine.dispatch({ type: 'sample-editor/cut' });
-      setSnapshot(engine.getSnapshot());
-      refreshSelectedSampleWaveform(engine.getSnapshot(), true);
-      updateModernLiveRegions(engine.getSnapshot());
+      invalidateSampleCache(snapshot.selectedSample);
+      const nextSnapshot = engine.getSnapshot();
+      setSnapshot(nextSnapshot);
+      refreshSelectedSampleWaveform(nextSnapshot, true);
+      updateModernLiveRegions(nextSnapshot);
       return true;
+    }
     case 'select-cell':
       engine.dispatch({
         type: 'cursor/set',
@@ -394,7 +403,7 @@ export const handleModernClickAction = async ({
       });
       const nextSnapshot = engine.getSnapshot();
       setSnapshot(nextSnapshot);
-      refreshSelectedSampleWaveform(nextSnapshot, true);
+      refreshSelectedSampleWaveform(nextSnapshot, false);
       if (nextSnapshot.samples[selectedSample]?.length === 0) {
         setPendingSampleImportSlot(selectedSample);
         sampleInput.multiple = false;

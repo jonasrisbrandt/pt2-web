@@ -1,6 +1,7 @@
 import createPt2Module from '../wasm/pt2clone.js';
 import type { TrackerEngine } from './trackerEngine';
 import type {
+  AudioMode,
   CursorField,
   EngineConfig,
   EngineEvent,
@@ -9,6 +10,7 @@ import type {
   QuadrascopeState,
   SampleExportFormat,
   TrackerCommand,
+  TrackerLiveState,
   TrackerSnapshot,
   TransportCommand,
 } from './trackerTypes';
@@ -32,6 +34,23 @@ type Pt2Module = {
 type Pt2ModuleFactory = (options: Record<string, unknown>) => Promise<Pt2Module>;
 
 const moduleFactory = createPt2Module as unknown as Pt2ModuleFactory;
+const LIVE_STATE_FLAG_PLAYING = 1 << 0;
+const LIVE_STATE_FLAG_PATTERN_MODE = 1 << 1;
+const LIVE_STATE_AUDIO_MODE_CUSTOM = 0;
+const LIVE_STATE_AUDIO_MODE_MONO = 1;
+const LIVE_STATE_AUDIO_MODE_AMIGA = 2;
+
+const decodeAudioMode = (value: number): AudioMode => {
+  if (value === LIVE_STATE_AUDIO_MODE_MONO) {
+    return 'mono';
+  }
+
+  if (value === LIVE_STATE_AUDIO_MODE_AMIGA) {
+    return 'amiga';
+  }
+
+  return 'custom';
+};
 
 const ensureDir = (module: Pt2Module, path: string): void => {
   if (!module.FS.analyzePath(path).exists) {
@@ -77,6 +96,8 @@ export class WasmTrackerEngine implements TrackerEngine {
   private listeners = new Set<(event: EngineEvent) => void>();
   private scopeBufferSupported = true;
   private scopeJsonSupported = true;
+  private liveStateBufferSupported = true;
+  private liveStateFallbackVersion = 0;
 
   async init(config: EngineConfig): Promise<void> {
     this.config = config;
@@ -314,8 +335,8 @@ export class WasmTrackerEngine implements TrackerEngine {
       case 'sample-editor/play':
         this.callVoid('pt2_web_engine_sample_play', ['number'], [command.mode === 'selection' ? 2 : command.mode === 'view' ? 1 : 0]);
         break;
-      case 'audio/toggle-stereo':
-        this.callVoid('pt2_web_engine_toggle_stereo', [], []);
+      case 'audio/cycle-mode':
+        this.callVoid('pt2_web_engine_cycle_audio_mode', [], []);
         break;
       case 'note-preview/play':
         this.callVoid('pt2_web_engine_preview_note', ['string', 'number'], [command.note, command.channel]);
@@ -325,7 +346,7 @@ export class WasmTrackerEngine implements TrackerEngine {
         break;
     }
 
-    this.emitSnapshot(this.getSnapshot());
+    this.emitSnapshotForTrackerCommand(command.type);
   }
 
   setTransport(command: TransportCommand): void {
@@ -355,7 +376,7 @@ export class WasmTrackerEngine implements TrackerEngine {
         break;
     }
 
-    this.emitSnapshot(this.getSnapshot());
+    this.emitSnapshotForTransportCommand();
   }
 
   refreshLayout(): void {
@@ -404,6 +425,51 @@ export class WasmTrackerEngine implements TrackerEngine {
     return this.snapshot;
   }
 
+  getLiveState(): TrackerLiveState | null {
+    if (!this.liveStateBufferSupported) {
+      return this.getLiveStateFallback();
+    }
+
+    try {
+      const module = this.requireModule();
+      const pointer = this.callNumber('pt2_web_engine_live_state_buffer', [], []);
+      const length = this.callNumber('pt2_web_engine_live_state_buffer_length', [], []);
+      if (pointer < 0 || length < 40) {
+        this.liveStateBufferSupported = false;
+        this.emitStatus('Live-state buffer disabled: invalid buffer metadata.', 'warn');
+        return this.getLiveStateFallback();
+      }
+
+      const view = new DataView(module.HEAPU8.buffer, pointer, length);
+      const version = view.getUint32(0, true);
+      const flags = view.getUint32(4, true);
+      const audioMode = decodeAudioMode(view.getInt32(8, true));
+      return {
+        version,
+        playing: (flags & LIVE_STATE_FLAG_PLAYING) !== 0,
+        mode: (flags & LIVE_STATE_FLAG_PATTERN_MODE) !== 0 ? 'pattern' : 'song',
+        audioMode,
+        stereo: audioMode !== 'mono',
+        mutedMask: view.getInt32(12, true),
+        bpm: view.getInt32(16, true),
+        speed: view.getInt32(20, true),
+        elapsedSeconds: view.getInt32(24, true),
+        row: view.getInt32(28, true),
+        pattern: view.getInt32(32, true),
+        position: view.getInt32(36, true),
+      };
+    } catch (error) {
+      this.liveStateBufferSupported = false;
+      this.emitStatus(
+        error instanceof Error
+          ? `Live-state buffer disabled: ${error.message}`
+          : 'Live-state buffer disabled.',
+        'warn',
+      );
+      return this.getLiveStateFallback();
+    }
+  }
+
   getQuadrascope(): QuadrascopeState | null {
     if (!this.scopeBufferSupported) {
       return this.getQuadrascopeFromJson();
@@ -449,6 +515,16 @@ export class WasmTrackerEngine implements TrackerEngine {
 
   getSampleWaveform(sample: number): Int8Array | null {
     const module = this.requireModule();
+    try {
+      const pointer = this.callNumber('pt2_web_engine_sample_buffer', ['number'], [sample]);
+      const length = this.callNumber('pt2_web_engine_sample_buffer_length', ['number'], [sample]);
+      if (pointer >= 0 && length > 0) {
+        return module.HEAP8.slice(pointer, pointer + length);
+      }
+    } catch {
+      // Fall back to raw export below if the direct sample buffer path is unavailable.
+    }
+
     const path = this.callString(
       'pt2_web_engine_save_sample',
       ['number', 'string', 'string'],
@@ -527,6 +603,28 @@ export class WasmTrackerEngine implements TrackerEngine {
     this.requireModule().ccall(name, null, argTypes, args);
   }
 
+  private emitSnapshotForTrackerCommand(commandType: TrackerCommand['type']): void {
+    if (this.isLiveStateTrackerCommand(commandType)) {
+      const nextSnapshot = this.applyLiveStateToSnapshot(this.getLiveState());
+      if (nextSnapshot) {
+        this.emitSnapshot(nextSnapshot);
+        return;
+      }
+    }
+
+    this.emitSnapshot(this.getSnapshot());
+  }
+
+  private emitSnapshotForTransportCommand(): void {
+    const nextSnapshot = this.applyLiveStateToSnapshot(this.getLiveState());
+    if (nextSnapshot) {
+      this.emitSnapshot(nextSnapshot);
+      return;
+    }
+
+    this.emitSnapshot(this.getSnapshot());
+  }
+
   private async syncWorkspace(): Promise<void> {
     const module = this.requireModule();
     if (module.IDBFS) {
@@ -556,6 +654,67 @@ export class WasmTrackerEngine implements TrackerEngine {
       sample: null,
       effect: null,
       param: null,
+    };
+  }
+
+  private isLiveStateTrackerCommand(commandType: TrackerCommand['type']): boolean {
+    return commandType === 'channel/toggle-mute' || commandType === 'audio/cycle-mode';
+  }
+
+  private getLiveStateFallback(): TrackerLiveState | null {
+    const snapshot = this.getSnapshot();
+    this.liveStateFallbackVersion += 1;
+    return this.snapshotToLiveState(snapshot, this.liveStateFallbackVersion);
+  }
+
+  private applyLiveStateToSnapshot(liveState: TrackerLiveState | null): TrackerSnapshot | null {
+    const snapshot = this.snapshot;
+    if (!snapshot || !liveState) {
+      return snapshot ?? null;
+    }
+
+    snapshot.audio.mode = liveState.audioMode;
+    snapshot.audio.stereo = liveState.stereo;
+    snapshot.transport.playing = liveState.playing;
+    snapshot.transport.mode = liveState.mode;
+    snapshot.transport.bpm = liveState.bpm;
+    snapshot.transport.speed = liveState.speed;
+    snapshot.transport.elapsedSeconds = liveState.elapsedSeconds;
+    snapshot.transport.row = liveState.row;
+    snapshot.transport.pattern = liveState.pattern;
+    snapshot.transport.position = liveState.position;
+    snapshot.song.currentPattern = liveState.pattern;
+    snapshot.song.currentPosition = liveState.position;
+    snapshot.pattern.index = liveState.pattern;
+
+    for (let channel = 0; channel < 4; channel += 1) {
+      snapshot.editor.muted[channel] = ((liveState.mutedMask >> channel) & 1) !== 0;
+    }
+
+    return snapshot;
+  }
+
+  private snapshotToLiveState(snapshot: TrackerSnapshot, version = 0): TrackerLiveState {
+    let mutedMask = 0;
+    for (let channel = 0; channel < 4; channel += 1) {
+      if (snapshot.editor.muted[channel]) {
+        mutedMask |= 1 << channel;
+      }
+    }
+
+    return {
+      version,
+      playing: snapshot.transport.playing,
+      mode: snapshot.transport.mode,
+      audioMode: snapshot.audio.mode,
+      stereo: snapshot.audio.stereo,
+      mutedMask,
+      bpm: snapshot.transport.bpm,
+      speed: snapshot.transport.speed,
+      elapsedSeconds: snapshot.transport.elapsedSeconds,
+      row: snapshot.transport.row,
+      pattern: snapshot.transport.pattern,
+      position: snapshot.transport.position,
     };
   }
 }

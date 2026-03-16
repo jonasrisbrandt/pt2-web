@@ -8,6 +8,7 @@ export interface ModernInputActionContext {
   snapshot: TrackerSnapshot;
   canEditSnapshot: (snapshot: TrackerSnapshot) => boolean;
   getSampleEditorView: (snapshot: TrackerSnapshot) => { start: number; length: number; end: number };
+  invalidateSampleCache: (sample: number) => void;
   refreshSelectedSampleWaveform: (snapshot: TrackerSnapshot, force?: boolean) => void;
   setSuppressNextModernRender?: (value: boolean) => void;
   setSampleEditorViewOverride: (value: { sample: number; start: number; length: number } | null) => void;
@@ -21,6 +22,7 @@ export const handleModernInputAction = ({
   snapshot,
   canEditSnapshot,
   getSampleEditorView,
+  invalidateSampleCache,
   refreshSelectedSampleWaveform,
   setSuppressNextModernRender,
   setSampleEditorViewOverride,
@@ -88,6 +90,19 @@ export const handleModernInputAction = ({
 
   const nextSnapshot = engine.getSnapshot();
   setSnapshot(nextSnapshot);
+  if (
+    inputKey === 'sample-name'
+    || inputKey === 'sample-volume'
+    || inputKey === 'sample-finetune'
+    || inputKey === 'sample-loop-start'
+    || inputKey === 'sample-loop-end'
+    || inputKey === 'sample-loop-enabled'
+  ) {
+    updateModernLiveRegions(nextSnapshot);
+    return true;
+  }
+
+  invalidateSampleCache(selectedSample);
   refreshSelectedSampleWaveform(nextSnapshot, true);
   updateModernLiveRegions(nextSnapshot);
   return true;

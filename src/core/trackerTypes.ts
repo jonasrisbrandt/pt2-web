@@ -8,6 +8,7 @@ export type CursorField =
   | 'paramHigh'
   | 'paramLow';
 export type TransportMode = 'song' | 'pattern';
+export type AudioMode = 'custom' | 'mono' | 'amiga';
 export type SampleExportFormat = 'wav' | 'iff' | 'raw';
 
 export interface ExportedFile {
@@ -51,7 +52,7 @@ export interface SampleSlot {
   fineTune: number;
   loopStart: number;
   loopLength: number;
-  preview?: number[];
+  dataRevision: number;
 }
 
 export interface QuadrascopeChannel {
@@ -62,6 +63,21 @@ export interface QuadrascopeChannel {
 
 export interface QuadrascopeState {
   channels: QuadrascopeChannel[];
+}
+
+export interface TrackerLiveState {
+  version: number;
+  playing: boolean;
+  mode: TransportMode;
+  audioMode: AudioMode;
+  stereo: boolean;
+  mutedMask: number;
+  bpm: number;
+  speed: number;
+  elapsedSeconds: number;
+  row: number;
+  pattern: number;
+  position: number;
 }
 
 export interface SampleEditorState {
@@ -103,6 +119,7 @@ export interface TrackerSnapshot {
   };
   capabilities: EngineCapabilities;
   audio: {
+    mode: AudioMode;
     stereo: boolean;
   };
   song: {
@@ -172,7 +189,7 @@ export type TrackerCommand =
   | { type: 'sample-editor/crop' }
   | { type: 'sample-editor/cut' }
   | { type: 'sample-editor/play'; mode: 'sample' | 'view' | 'selection' }
-  | { type: 'audio/toggle-stereo' }
+  | { type: 'audio/cycle-mode' }
   | { type: 'note-preview/play'; note: string; channel: number }
   | { type: 'note-preview/stop' };
 

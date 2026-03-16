@@ -71,9 +71,61 @@ static int8_t scopeBuffer[(PAULA_VOICES * (2 + 64))];
 static char moduleExportPath[PATH_MAX + 1];
 static char sampleExportPath[PATH_MAX + 1];
 static char recentModuleName[PATH_MAX + 1];
-static bool pt2webStereoEnabled = true;
+static int32_t pt2webAudioMode = 0;
+static uint32_t pt2webNextSampleDataRevision = 1;
+static uint32_t pt2webSampleDataRevisions[MOD_SAMPLES];
+
+typedef struct pt2webLiveState_t
+{
+	uint32_t version;
+	uint32_t flags;
+	int32_t audioMode;
+	int32_t mutedMask;
+	int32_t bpm;
+	int32_t speed;
+	int32_t elapsedSeconds;
+	int32_t row;
+	int32_t pattern;
+	int32_t position;
+} pt2webLiveState_t;
+
+static pt2webLiveState_t pt2webLiveStateBuffer;
 
 #define PT2_WEB_SAMPLE_PREVIEW_POINTS 256
+
+enum
+{
+	PT2_WEB_LIVE_FLAG_PLAYING = 1 << 0,
+	PT2_WEB_LIVE_FLAG_PATTERN_MODE = 1 << 1
+};
+
+enum
+{
+	PT2_WEB_AUDIO_MODE_CUSTOM = 0,
+	PT2_WEB_AUDIO_MODE_MONO = 1,
+	PT2_WEB_AUDIO_MODE_AMIGA = 2
+};
+
+static const char *pt2webAudioModeName(void)
+{
+	if (pt2webAudioMode == PT2_WEB_AUDIO_MODE_MONO)
+		return "mono";
+
+	if (pt2webAudioMode == PT2_WEB_AUDIO_MODE_AMIGA)
+		return "amiga";
+
+	return "custom";
+}
+
+static void pt2webApplyAudioMode(void)
+{
+	if (pt2webAudioMode == PT2_WEB_AUDIO_MODE_MONO)
+		audioSetStereoSeparation(0);
+	else if (pt2webAudioMode == PT2_WEB_AUDIO_MODE_AMIGA)
+		audioSetStereoSeparation(100);
+	else
+		audioSetStereoSeparation(config.stereoSeparation);
+}
 
 static int8_t clampInt8(int32_t value, int32_t low, int32_t high)
 {
@@ -83,6 +135,71 @@ static int8_t clampInt8(int32_t value, int32_t low, int32_t high)
 		value = high;
 
 	return (int8_t)value;
+}
+
+static uint32_t pt2webAllocateSampleDataRevision(void)
+{
+	pt2webNextSampleDataRevision++;
+	if (pt2webNextSampleDataRevision == 0)
+		pt2webNextSampleDataRevision = 1;
+
+	return pt2webNextSampleDataRevision;
+}
+
+static void pt2webMarkSampleDataDirty(int32_t sample)
+{
+	if (sample < 0 || sample >= MOD_SAMPLES)
+		return;
+
+	pt2webSampleDataRevisions[sample] = pt2webAllocateSampleDataRevision();
+}
+
+static void pt2webMarkAllSampleDataDirty(void)
+{
+	for (int32_t i = 0; i < MOD_SAMPLES; i++)
+		pt2webMarkSampleDataDirty(i);
+}
+
+static const pt2webLiveState_t *pt2webUpdateLiveStateBuffer(void)
+{
+	pt2webLiveState_t nextState;
+	memset(&nextState, 0, sizeof (nextState));
+
+	nextState.version = pt2webLiveStateBuffer.version;
+	if (song != NULL)
+	{
+		if (editor.songPlaying)
+			nextState.flags |= PT2_WEB_LIVE_FLAG_PLAYING;
+		if (editor.playMode == PLAY_MODE_PATTERN)
+			nextState.flags |= PT2_WEB_LIVE_FLAG_PATTERN_MODE;
+		nextState.audioMode = pt2webAudioMode;
+
+		for (int32_t channel = 0; channel < PAULA_VOICES; channel++)
+		{
+			if (editor.muted[channel])
+				nextState.mutedMask |= 1 << channel;
+		}
+
+		nextState.bpm = song->currBPM;
+		nextState.speed = song->currSpeed;
+		nextState.elapsedSeconds = (int32_t)editor.playbackSeconds;
+		nextState.row = song->currRow;
+		nextState.pattern = song->currPattern;
+		nextState.position = song->currPos;
+	}
+
+	if (memcmp(
+		((uint8_t *)&nextState) + sizeof (nextState.version),
+		((const uint8_t *)&pt2webLiveStateBuffer) + sizeof (pt2webLiveStateBuffer.version),
+		sizeof (nextState) - sizeof (nextState.version)) != 0)
+	{
+		nextState.version = pt2webLiveStateBuffer.version + 1;
+		if (nextState.version == 0)
+			nextState.version = 1;
+	}
+
+	pt2webLiveStateBuffer = nextState;
+	return &pt2webLiveStateBuffer;
 }
 
 static uint32_t pt2webMouseMaskFromDomButtons(int32_t buttons)
@@ -810,8 +927,10 @@ int32_t pt2_web_load_file_from_path(const char *fullPath, int32_t autoPlay)
 
 int32_t pt2_web_engine_boot(void)
 {
-	audioSetStereoSeparation(100);
-	pt2webStereoEnabled = true;
+	pt2webAudioMode = PT2_WEB_AUDIO_MODE_CUSTOM;
+	pt2webApplyAudioMode();
+	pt2webMarkAllSampleDataDirty();
+	memset(&pt2webLiveStateBuffer, 0, sizeof (pt2webLiveStateBuffer));
 	return song != NULL;
 }
 
@@ -821,7 +940,11 @@ int32_t pt2_web_engine_load_module(const char *fullPath)
 		return false;
 
 	copyRecentModuleName(fullPath);
-	return pt2_web_load_file_from_path(fullPath, false);
+	const bool loaded = pt2_web_load_file_from_path(fullPath, false);
+	if (loaded)
+		pt2webMarkAllSampleDataDirty();
+
+	return loaded;
 }
 
 const char *pt2_web_engine_save_module(const char *directory)
@@ -844,7 +967,11 @@ int32_t pt2_web_engine_load_sample(const char *fullPath)
 	if (song == NULL || fullPath == NULL || fullPath[0] == '\0')
 		return false;
 
-	return loadSample((UNICHAR *)(uintptr_t)fullPath, (char *)(uintptr_t)getBaseName(fullPath));
+	const bool loaded = loadSample((UNICHAR *)(uintptr_t)fullPath, (char *)(uintptr_t)getBaseName(fullPath));
+	if (loaded)
+		pt2webMarkSampleDataDirty(editor.currSample);
+
+	return loaded;
 }
 
 const char *pt2_web_engine_save_sample(int32_t slot, const char *format, const char *directory)
@@ -908,6 +1035,7 @@ void pt2_web_engine_new_song(void)
 	modStop();
 	clearSong();
 	clearSamples();
+	pt2webMarkAllSampleDataDirty();
 	recentModuleName[0] = '\0';
 	statusAllRight();
 }
@@ -1055,6 +1183,7 @@ void pt2_web_engine_update_sample(int32_t sample, const char *name, int32_t volu
 
 	sample = CLAMP(sample, 0, MOD_SAMPLES - 1);
 	moduleSample_t *s = &song->samples[sample];
+	const int32_t oldLength = s->length;
 
 	editor.currSample = (int8_t)sample;
 	editor.sampleZero = false;
@@ -1073,6 +1202,8 @@ void pt2_web_engine_update_sample(int32_t sample, const char *name, int32_t volu
 	fixSampleBeep(s);
 	updatePaulaLoops();
 	pt2webRefreshSelectedSample();
+	if (s->length != oldLength)
+		pt2webMarkSampleDataDirty(sample);
 
 	pt2webMarkSongModified();
 }
@@ -1203,6 +1334,7 @@ void pt2_web_engine_sample_toggle_loop(int32_t enabled)
 void pt2_web_engine_sample_crop(void)
 {
 	pt2webCropCurrentSample();
+	pt2webMarkSampleDataDirty(editor.currSample);
 }
 
 void pt2_web_engine_sample_cut(void)
@@ -1212,6 +1344,7 @@ void pt2_web_engine_sample_cut(void)
 
 	samplerSamDelete(1);
 	pt2webRefreshSelectedSample();
+	pt2webMarkSampleDataDirty(editor.currSample);
 	pt2webMarkSongModified();
 }
 
@@ -1228,10 +1361,20 @@ void pt2_web_engine_sample_play(int32_t mode)
 	}
 }
 
-void pt2_web_engine_toggle_stereo(void)
+void pt2_web_engine_cycle_audio_mode(void)
 {
-	pt2webStereoEnabled = !pt2webStereoEnabled;
-	audioSetStereoSeparation(pt2webStereoEnabled ? 100 : 0);
+	pt2webAudioMode = (pt2webAudioMode + 1) % 3;
+	pt2webApplyAudioMode();
+}
+
+const uint8_t *pt2_web_engine_live_state_buffer(void)
+{
+	return (const uint8_t *)pt2webUpdateLiveStateBuffer();
+}
+
+int32_t pt2_web_engine_live_state_buffer_length(void)
+{
+	return (int32_t)sizeof (pt2webLiveStateBuffer);
 }
 
 void pt2_web_engine_preview_note(const char *note, int32_t channel)
@@ -1516,8 +1659,9 @@ const char *pt2_web_engine_snapshot_json(void)
 		video.fullscreen ? "true" : "false");
 
 	offset = (size_t)jsonAppend(snapshotJSON, sizeof (snapshotJSON), offset,
-		",\"audio\":{\"stereo\":%s}",
-		pt2webStereoEnabled ? "true" : "false");
+		",\"audio\":{\"mode\":\"%s\",\"stereo\":%s}",
+		pt2webAudioModeName(),
+		(pt2webAudioMode == PT2_WEB_AUDIO_MODE_MONO) ? "false" : "true");
 
 	offset = (size_t)jsonAppend(snapshotJSON, sizeof (snapshotJSON), offset,
 		",\"song\":{\"title\":");
@@ -1611,9 +1755,8 @@ const char *pt2_web_engine_snapshot_json(void)
 			"{\"index\":%d,\"name\":", i);
 		offset = (size_t)jsonAppendQuotedString(snapshotJSON, sizeof (snapshotJSON), offset, s->text);
 		offset = (size_t)jsonAppend(snapshotJSON, sizeof (snapshotJSON), offset,
-			",\"length\":%d,\"volume\":%d,\"fineTune\":%d,\"loopStart\":%d,\"loopLength\":%d",
-			s->length, s->volume, sampleFineTuneSigned(s), s->loopStart, s->loopLength);
-		appendSamplePreviewJSON(snapshotJSON, sizeof (snapshotJSON), &offset, s);
+			",\"length\":%d,\"volume\":%d,\"fineTune\":%d,\"loopStart\":%d,\"loopLength\":%d,\"dataRevision\":%u",
+			s->length, s->volume, sampleFineTuneSigned(s), s->loopStart, s->loopLength, pt2webSampleDataRevisions[i]);
 		offset = (size_t)jsonAppend(snapshotJSON, sizeof (snapshotJSON), offset, "}");
 	}
 

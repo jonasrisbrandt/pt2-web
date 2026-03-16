@@ -10,6 +10,7 @@ import type {
   SampleExportFormat,
   SampleSlot,
   TrackerCommand,
+  TrackerLiveState,
   TrackerSnapshot,
   TransportCommand,
 } from './trackerTypes';
@@ -114,13 +115,13 @@ const createSamples = (): SampleSlot[] =>
     fineTune: 0,
     loopStart: 0,
     loopLength: 2,
-    preview: index === 0 ? createMockPreview(index) : Array.from({ length: SAMPLE_PREVIEW_POINTS }, () => 0),
+    dataRevision: index + 1,
   }));
 
 const createSampleData = (samples: SampleSlot[]): Int8Array[] =>
   samples.map((sample, index) => {
     if (sample.length > 0) {
-      return createSampleDataFromPreview(sample.preview ?? createMockPreview(index), sample.length);
+      return createSampleDataFromPreview(createMockPreview(index), sample.length);
     }
 
     return new Int8Array(0);
@@ -154,6 +155,7 @@ const createSnapshot = (status: string): TrackerSnapshot => ({
     browserPersistence: false,
   },
   audio: {
+    mode: 'custom',
     stereo: true,
   },
   song: {
@@ -264,7 +266,7 @@ export class MockTrackerEngine implements TrackerEngine {
     const data = createSampleDataFromBytes(file);
     sample.name = name.replace(/\.[^.]+$/, '').slice(0, 22);
     sample.length = data.length;
-    sample.preview = createSamplePreviewFromData(data);
+    sample.dataRevision += 1;
     sample.loopStart = 0;
     sample.loopLength = Math.min(Math.max(2, data.length), Math.max(2, data.length));
     this.sampleData[sample.index] = data;
@@ -398,7 +400,7 @@ export class MockTrackerEngine implements TrackerEngine {
         this.syncSampleEditor(command.sample, false);
         if (typeof command.patch.length === 'number') {
           this.sampleData[command.sample] = this.resizeSampleData(this.sampleData[command.sample] ?? new Int8Array(0), sample.length);
-          sample.preview = createSamplePreviewFromData(this.sampleData[command.sample]);
+          sample.dataRevision += 1;
         }
         break;
       }
@@ -445,8 +447,13 @@ export class MockTrackerEngine implements TrackerEngine {
       case 'sample-editor/play':
         this.playSamplePreview(command.mode);
         break;
-      case 'audio/toggle-stereo':
-        this.snapshot.audio.stereo = !this.snapshot.audio.stereo;
+      case 'audio/cycle-mode':
+        this.snapshot.audio.mode = this.snapshot.audio.mode === 'custom'
+          ? 'mono'
+          : this.snapshot.audio.mode === 'mono'
+            ? 'amiga'
+            : 'custom';
+        this.snapshot.audio.stereo = this.snapshot.audio.mode !== 'mono';
         break;
       case 'note-preview/play':
         break;
@@ -524,6 +531,30 @@ export class MockTrackerEngine implements TrackerEngine {
 
   getSnapshot(): TrackerSnapshot {
     return clone(this.snapshot);
+  }
+
+  getLiveState(): TrackerLiveState | null {
+    let mutedMask = 0;
+    for (let channel = 0; channel < DEFAULT_CHANNELS; channel += 1) {
+      if (this.snapshot.editor.muted[channel]) {
+        mutedMask |= 1 << channel;
+      }
+    }
+
+    return {
+      version: this.snapshot.transport.elapsedSeconds + (this.snapshot.transport.row << 16),
+      playing: this.snapshot.transport.playing,
+      mode: this.snapshot.transport.mode,
+      audioMode: this.snapshot.audio.mode,
+      stereo: this.snapshot.audio.stereo,
+      mutedMask,
+      bpm: this.snapshot.transport.bpm,
+      speed: this.snapshot.transport.speed,
+      elapsedSeconds: this.snapshot.transport.elapsedSeconds,
+      row: this.snapshot.transport.row,
+      pattern: this.snapshot.transport.pattern,
+      position: this.snapshot.transport.position,
+    };
   }
 
   getQuadrascope(): QuadrascopeState | null {
@@ -796,7 +827,7 @@ export class MockTrackerEngine implements TrackerEngine {
 
     this.sampleData[this.snapshot.selectedSample] = nextData;
     sample.length = nextData.length;
-    sample.preview = createSamplePreviewFromData(nextData);
+    sample.dataRevision += 1;
     sample.loopStart = 0;
     sample.loopLength = Math.max(2, Math.min(nextData.length, Math.max(2, nextData.length)));
     state.selectionStart = null;

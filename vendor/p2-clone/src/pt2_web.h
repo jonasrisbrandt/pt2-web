@@ -38,7 +38,7 @@ void pt2_web_engine_sample_toggle_loop(int32_t enabled);
 void pt2_web_engine_sample_crop(void);
 void pt2_web_engine_sample_cut(void);
 void pt2_web_engine_sample_play(int32_t mode);
-void pt2_web_engine_toggle_stereo(void);
+void pt2_web_engine_cycle_audio_mode(void);
 void pt2_web_engine_preview_note(const char *note, int32_t channel);
 void pt2_web_engine_preview_note_stop(void);
 void pt2_web_engine_transport_play_song(void);
@@ -51,6 +51,8 @@ void pt2_web_engine_pointer_button(int32_t x, int32_t y, int32_t button, int32_t
 void pt2_web_engine_key_down(int32_t scancode, int32_t keycode, int32_t shift, int32_t ctrl, int32_t alt, int32_t meta);
 void pt2_web_engine_key_up(int32_t scancode, int32_t keycode, int32_t shift, int32_t ctrl, int32_t alt, int32_t meta);
 void pt2_web_engine_text_input(const char *text);
+const uint8_t *pt2_web_engine_live_state_buffer(void);
+int32_t pt2_web_engine_live_state_buffer_length(void);
 const int8_t *pt2_web_engine_scope_buffer(void);
 int32_t pt2_web_engine_scope_buffer_length(void);
 const int8_t *pt2_web_engine_sample_buffer(int32_t sample);

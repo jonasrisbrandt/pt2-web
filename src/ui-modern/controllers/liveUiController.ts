@@ -7,34 +7,52 @@ export const setLiveText = (root: HTMLElement, role: string, value: string): voi
   }
 };
 
+export interface LiveUiRefs {
+  samplePageLabel: HTMLElement | null;
+  samplePagePrevButton: HTMLButtonElement | null;
+  samplePageNextButton: HTMLButtonElement | null;
+  sampleBank: HTMLElement | null;
+  sampleDetailContent: HTMLElement | null;
+  selectedSampleTitle: HTMLElement | null;
+  selectedSampleHint: HTMLElement | null;
+  trackMuteButtons: Array<HTMLButtonElement | null>;
+  trackMuteLabels: Array<HTMLElement | null>;
+}
+
 export interface TrackMuteButtonUpdateOptions {
-  root: HTMLElement;
+  refs: LiveUiRefs;
   snapshot: TrackerSnapshot;
   renderMuteIcon: (muted: boolean, channel: number) => string;
 }
 
 export const updateTrackMuteButtons = ({
-  root,
+  refs,
   snapshot,
   renderMuteIcon,
 }: TrackMuteButtonUpdateOptions): void => {
   for (let channel = 0; channel < 4; channel += 1) {
     const muted = snapshot.editor.muted[channel] ?? false;
-    const button = root.querySelector<HTMLButtonElement>(`[data-role="track-mute-${channel}"]`);
+    const button = refs.trackMuteButtons[channel] ?? null;
     if (button) {
       button.classList.toggle('is-muted', muted);
       button.setAttribute('aria-pressed', muted ? 'true' : 'false');
-      button.setAttribute('aria-label', `${muted ? 'Unmute' : 'Mute'} track ${channel + 1}`);
-      button.innerHTML = renderMuteIcon(muted, channel);
+      const label = `${muted ? 'Unmute' : 'Mute'} track ${channel + 1}`;
+      if (button.getAttribute('aria-label') !== label) {
+        button.setAttribute('aria-label', label);
+      }
+      if (button.dataset.mutedState !== String(muted)) {
+        button.dataset.mutedState = String(muted);
+        button.innerHTML = renderMuteIcon(muted, channel);
+      }
     }
 
-    const label = button?.closest('.track-label');
+    const label = refs.trackMuteLabels[channel] ?? null;
     label?.classList.toggle('is-muted', muted);
   }
 };
 
 export interface SamplePanelUpdateOptions {
-  root: HTMLElement;
+  refs: LiveUiRefs;
   snapshot: TrackerSnapshot;
   samplePanelKey: string | null;
   samplePreviewCanvas: HTMLCanvasElement;
@@ -50,7 +68,7 @@ export interface SamplePanelUpdateOptions {
 }
 
 export const updateSamplePanel = ({
-  root,
+  refs,
   snapshot,
   samplePanelKey,
   samplePreviewCanvas,
@@ -69,39 +87,52 @@ export const updateSamplePanel = ({
   const pageCount = getSamplePageCount(snapshot);
   const nextSamplePanelKey = getSamplePanelKey(snapshot, samplePage);
 
-  setLiveText(root, 'sample-page-label', `Page ${samplePage + 1} / ${pageCount}`);
+  if (refs.samplePageLabel && refs.samplePageLabel.textContent !== `Page ${samplePage + 1} / ${pageCount}`) {
+    refs.samplePageLabel.textContent = `Page ${samplePage + 1} / ${pageCount}`;
+  }
 
-  const prevButton = root.querySelector<HTMLButtonElement>('[data-action="sample-page-prev"]');
+  const prevButton = refs.samplePagePrevButton;
   if (prevButton) {
     prevButton.disabled = samplePage <= 0;
   }
 
-  const nextButton = root.querySelector<HTMLButtonElement>('[data-action="sample-page-next"]');
+  const nextButton = refs.samplePageNextButton;
   if (nextButton) {
     nextButton.disabled = samplePage >= pageCount - 1;
   }
 
   if (samplePanelKey === nextSamplePanelKey) {
     if (syncSelectedSampleTitle) {
-      const title = root.querySelector<HTMLElement>('[data-role="selected-sample-title"]');
+      const title = refs.selectedSampleTitle;
       if (title) {
         if (renderSelectedSampleTitle) {
-          title.innerHTML = renderSelectedSampleTitle(selectedSample);
+          const html = renderSelectedSampleTitle(selectedSample);
+          if (title.innerHTML !== html) {
+            title.innerHTML = html;
+          }
         } else {
-          title.textContent = getSelectedSampleHeading(selectedSample);
+          const text = getSelectedSampleHeading(selectedSample);
+          if (title.textContent !== text) {
+            title.textContent = text;
+          }
         }
       }
     }
-    setLiveText(root, 'selected-sample-hint', formatSelectedSampleHint(selectedSample));
+    if (refs.selectedSampleHint) {
+      const hint = formatSelectedSampleHint(selectedSample);
+      if (refs.selectedSampleHint.textContent !== hint) {
+        refs.selectedSampleHint.textContent = hint;
+      }
+    }
     return nextSamplePanelKey;
   }
 
-  const bank = root.querySelector<HTMLElement>('[data-role="sample-bank"]');
+  const bank = refs.sampleBank;
   if (bank) {
     bank.innerHTML = renderSampleBank(snapshot, samplePage);
   }
 
-  const detail = root.querySelector<HTMLElement>('[data-role="sample-detail-content"]');
+  const detail = refs.sampleDetailContent;
   if (detail) {
     detail.innerHTML = renderSelectedSamplePanel(selectedSample, snapshot);
     const previewHost = detail.querySelector<HTMLElement>('[data-role="sample-preview-host"]');
@@ -111,7 +142,7 @@ export const updateSamplePanel = ({
   }
 
   if (syncSelectedSampleTitle) {
-    const title = root.querySelector<HTMLElement>('[data-role="selected-sample-title"]');
+    const title = refs.selectedSampleTitle;
     if (title) {
       if (renderSelectedSampleTitle) {
         title.innerHTML = renderSelectedSampleTitle(selectedSample);
@@ -120,6 +151,8 @@ export const updateSamplePanel = ({
       }
     }
   }
-  setLiveText(root, 'selected-sample-hint', formatSelectedSampleHint(selectedSample));
+  if (refs.selectedSampleHint) {
+    refs.selectedSampleHint.textContent = formatSelectedSampleHint(selectedSample);
+  }
   return nextSamplePanelKey;
 };
