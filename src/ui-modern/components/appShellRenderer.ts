@@ -18,8 +18,6 @@ export interface AppShellRenderOptions {
   samplesCollapsed: boolean;
   samplesCollapseIconHtml: string;
   classicDebugHtml: string;
-  classicCollapsed: boolean;
-  classicCollapseIconHtml: string;
   samplePagePrevDisabled: boolean;
   samplePageNextDisabled: boolean;
   samplePagePrevIconHtml: string;
@@ -69,8 +67,6 @@ export const renderAppShellMarkup = ({
   samplesCollapsed,
   samplesCollapseIconHtml,
   classicDebugHtml,
-  classicCollapsed,
-  classicCollapseIconHtml,
   samplePagePrevDisabled,
   samplePageNextDisabled,
   samplePagePrevIconHtml,
@@ -196,17 +192,7 @@ export const renderAppShellMarkup = ({
         </div>
       </section>
 
-      <section class="panel canvas-panel${classicCollapsed ? ' is-collapsed' : ''}">
-        <div class="panel-head compact panel-head--section">
-          <div class="panel-heading-copy">
-            <button type="button" class="section-heading-button" data-action="toggle-section-classic" aria-expanded="${classicCollapsed ? 'false' : 'true'}">
-              <span class="section-heading-button__copy">
-                <span class="panel-label">Classic</span>
-              </span>
-              <span class="section-heading-button__icon" aria-hidden="true">${classicCollapseIconHtml}</span>
-            </button>
-          </div>
-        </div>
+      <section class="panel canvas-panel">
         <div class="panel-body">
           ${classicDebugHtml}
           <div class="engine-canvas-host"></div>

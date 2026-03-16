@@ -1075,7 +1075,59 @@
 
 .app-shell--classic .canvas-panel {
   display: block;
-  min-height: calc(100vh - 220px);
+  min-height: 0;
+}
+
+.app-shell--classic .menu-trigger:hover,
+.app-shell--classic .menu-trigger.is-open {
+  border-color: rgba(102, 168, 255, 0.34);
+  background: rgba(28, 49, 86, 0.72);
+}
+
+.app-shell--classic .menu-surface {
+  border-color: rgba(154, 200, 255, 0.16);
+  background: rgba(9, 15, 26, 0.98);
+}
+
+.app-shell--classic .menu-item:hover,
+.app-shell--classic .menu-item:focus-visible {
+  border-color: rgba(102, 168, 255, 0.26);
+  background: rgba(28, 49, 86, 0.8);
+}
+
+.app-shell--classic .menu-separator {
+  background: rgba(154, 200, 255, 0.14);
+}
+
+.app-shell--classic .toolbar-button,
+.app-shell--classic .icon-button,
+.app-shell--classic .tool-icon-button {
+  border-color: rgba(154, 200, 255, 0.22);
+  background: rgba(18, 31, 52, 0.92);
+}
+
+.app-shell--classic .toolbar-button--primary {
+  border-color: rgba(102, 168, 255, 0.5);
+  background: linear-gradient(135deg, rgba(102, 168, 255, 0.2), rgba(31, 57, 98, 0.95));
+}
+
+.app-shell--classic .toolbar-button.is-active,
+.app-shell--classic .toolbar-button:hover,
+.app-shell--classic .icon-button:hover,
+.app-shell--classic .tool-icon-button:hover,
+.app-shell--classic .tool-icon-button.is-active,
+.app-shell--classic .icon-button.is-active {
+  border-color: rgba(102, 168, 255, 0.75);
+  background: rgba(31, 57, 98, 0.95);
+}
+
+.app-shell--classic .tool-icon-button__value {
+  background: rgba(8, 13, 22, 0.92);
+}
+
+.app-shell--classic .modal-card {
+  border-color: rgba(154, 200, 255, 0.16);
+  background: rgba(10, 17, 30, 0.98);
 }
 
 .modal-overlay {

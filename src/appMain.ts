@@ -122,7 +122,7 @@ const SAMPLE_PREVIEW_HEIGHT = 182;
 const SAMPLE_EDITOR_HEIGHT = 352;
 const SAMPLE_PREVIEW_RATE = 8287;
 
-type SectionKey = 'module' | 'visualization' | 'editor' | 'samples' | 'classic';
+type SectionKey = 'module' | 'visualization' | 'editor' | 'samples';
 type MenuKey = 'file' | 'help';
 type SampleEditorPopoverKey = 'volume' | 'fineTune';
 type SampleEditorNumericField = 'volume' | 'fineTune';
@@ -254,7 +254,6 @@ export class TrackerApplication {
     visualization: false,
     editor: false,
     samples: false,
-    classic: false,
   };
   private renameState: InlineRenameState | null = null;
   private pendingRenameFocus: InlineRenameState['kind'] | null = null;
@@ -429,6 +428,7 @@ export class TrackerApplication {
     }
     const shell = document.createElement('div');
     shell.className = `app-shell app-shell--${this.viewMode}`;
+    document.body.dataset.viewMode = this.viewMode;
     const moduleCardsHtml = [
       this.renderModuleStepperCard('Position', String(snapshot.transport.position).padStart(2, '0'), 'position', 'song-position-down', 'song-position-up', this.canEditSnapshot(snapshot)),
       this.renderModuleStepperCard('Pattern', String(snapshot.pattern.index).padStart(2, '0'), 'pattern', 'song-pattern-down', 'song-pattern-up', this.canEditSnapshot(snapshot)),
@@ -508,8 +508,6 @@ export class TrackerApplication {
       samplesCollapsed: this.collapsedSections.samples,
       samplesCollapseIconHtml: this.getSectionCollapseIcon('samples'),
       classicDebugHtml: this.renderClassicDebug(),
-      classicCollapsed: this.collapsedSections.classic,
-      classicCollapseIconHtml: this.getSectionCollapseIcon('classic'),
       samplePagePrevDisabled: samplePage <= 0,
       samplePageNextDisabled: samplePage >= this.getSamplePageCount(snapshot) - 1,
       samplePagePrevIconHtml: iconMarkup(ChevronLeft),
@@ -1773,9 +1771,6 @@ export class TrackerApplication {
         return;
       case 'toggle-section-samples':
         this.toggleSection('samples');
-        return;
-      case 'toggle-section-classic':
-        this.toggleSection('classic');
         return;
       case 'sample-editor-open-volume':
         this.toggleSampleEditorPopover('volume');

@@ -12,6 +12,18 @@
   font-family: "Trebuchet MS", "Lucida Sans Unicode", "Segoe UI", sans-serif;
 }
 
+body[data-view-mode="classic"] {
+  --bg: #101624;
+  --panel: rgba(15, 24, 40, 0.86);
+  --panel-strong: rgba(22, 35, 58, 0.95);
+  --line: rgba(146, 188, 255, 0.18);
+  --text: #eff5ff;
+  --muted: #b5c5df;
+  --accent: #9ac8ff;
+  --accent-strong: #66a8ff;
+  --shadow: 0 28px 90px rgba(0, 0, 0, 0.48);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -29,6 +41,13 @@ body {
 
 body {
   min-height: 100vh;
+}
+
+body[data-view-mode="classic"] {
+  background:
+    radial-gradient(circle at top left, rgba(102, 168, 255, 0.18), transparent 30%),
+    radial-gradient(circle at top right, rgba(154, 200, 255, 0.16), transparent 34%),
+    linear-gradient(180deg, #192338 0%, #0a0f1a 100%);
 }
 
 button,
@@ -503,26 +522,38 @@ h2 {
 }
 
 .app-shell--classic .canvas-panel {
-  min-height: calc(100vh - 280px);
-  padding: 18px;
+  min-height: 0;
+  padding: 16px;
+}
+
+.app-shell--classic .canvas-panel .panel-body {
+  gap: 0;
 }
 
 .app-shell--classic .engine-canvas-host {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: calc(100vh - 360px);
+  min-height: 0;
 }
 
 .engine-canvas-classic {
-  width: min(100%, calc((100vh - 360px) * 320 / 255));
+  width: min(100%, calc((100vh - 220px) * 320 / 255));
   max-width: 1440px;
   min-height: 0;
   height: auto;
   aspect-ratio: 320 / 255;
   border-style: solid;
-  border-color: rgba(212, 255, 117, 0.16);
+  border-color: rgba(154, 200, 255, 0.26);
   background: #000;
+}
+
+.app-shell--classic .engine-canvas,
+.app-shell--classic .engine-canvas-classic {
+  border-color: rgba(154, 200, 255, 0.26);
+  background:
+    linear-gradient(180deg, rgba(102, 168, 255, 0.12), rgba(0, 0, 0, 0.08)),
+    linear-gradient(90deg, rgba(154, 200, 255, 0.08), transparent 42%);
 }
 
 .fatal-screen {
