@@ -11,10 +11,21 @@
 - Notice file: `vendor/p2-clone/src/smploaders/miniflac license.txt`
 - License summary: permissive BSD-0-style notice as documented by upstream
 
+## libxmp PP20 depacker adaptation
+- Location: `vendor/p2-clone/src/modloaders/pt2_pp_unpack.c`
+- Upstream project: `https://github.com/libxmp/libxmp`
+- License: MIT
+- Notice file: `licenses/libxmp-MIT.txt`
+- Notes: `pt2_pp_unpack.c` adapts libxmp's PP20 depacker logic to pt2-web's `FILE *` loader path while preserving the upstream attribution comments for the original Public Domain depacker basis and libxmp modifications.
+
+## lucide
+- Location: npm dependency `lucide`
+- Upstream project: `https://lucide.dev`
+- License: ISC
+- Notice file when installed: `node_modules/lucide/LICENSE`
+- Notes: The lucide package also includes an MIT notice for Feather-derived portions inside the same upstream license file.
+
 ## Freedesktop.org Resources
 - Location: `vendor/p2-clone/release/other/Freedesktop.org Resources`
 - Notice file: `vendor/p2-clone/release/other/Freedesktop.org Resources/LICENSE`
-
-## Release blocker
-- `vendor/p2-clone/src/modloaders/pt2_pp_unpack.c` contains a source comment that does not establish clear license provenance.
-- Public release readiness remains blocked until that code path is verified or replaced without compatibility loss.
+- License summary: BSD-2-Clause-style notice as documented by upstream

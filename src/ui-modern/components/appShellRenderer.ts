@@ -226,9 +226,17 @@ export const renderAppShellMarkup = ({
       </div>
       <div class="modal-copy">
         <p><strong>Version</strong> ${appVersion}</p>
-        <p><strong>Credits</strong> PT2 web shell on top of the vendored p2-clone ProTracker core.</p>
-        <p><strong>Licenses</strong></p>
-        <p><a href="./LICENSE" target="_blank" rel="noreferrer">BSD-3-Clause license</a></p>
+        <p><strong>Credits</strong></p>
+        <p>Original Amiga ProTracker lineage: Amiga Freelancers, followed by Peter "Crayon" Hanning and Anders Ramsay for the later 2.x line referenced by this project.</p>
+        <p>p2-clone core: Olav "8bitbubsy" Sorensen.</p>
+        <p>pt2 web port and UI shell: Jonas Risbrandt.</p>
+        <p><strong>Projects used</strong></p>
+        <p><a href="https://github.com/8bitbubsy/pt2-clone" target="_blank" rel="noreferrer">p2-clone</a>, <a href="https://github.com/libxmp/libxmp" target="_blank" rel="noreferrer">libxmp</a>, <a href="https://github.com/jprjr/miniflac" target="_blank" rel="noreferrer">miniflac</a>, and <a href="https://lucide.dev" target="_blank" rel="noreferrer">lucide</a>.</p>
+        <p><strong>License summary</strong></p>
+        <p><code>pt2-web</code>: BSD-3-Clause. <code>p2-clone</code>: BSD-3-Clause. PP20 depacker adaptation from <code>libxmp</code>: MIT. <code>miniflac</code>: BSD-0-style. <code>lucide</code>: ISC, with an MIT notice for Feather-derived portions.</p>
+        <p>Preserved Freedesktop.org packaging resources in the vendored upstream tree keep their upstream BSD-2-Clause-style notice.</p>
+        <p><a href="./LICENSE" target="_blank" rel="noreferrer">Project license</a></p>
+        <p><a href="./licenses/libxmp-MIT.txt" target="_blank" rel="noreferrer">MIT license copy for the PP20 adaptation</a></p>
         <p><a href="./THIRD_PARTY_NOTICES.md" target="_blank" rel="noreferrer">Third-party notices</a></p>
       </div>
     </div>
