@@ -118,39 +118,3 @@ export interface PatternPanelRenderOptions {
   collapsed: boolean;
   collapseIconHtml: string;
 }
-
-export const renderPatternEditorPanel = ({
-  octave,
-  octaveOneActive,
-  octaveTwoActive,
-  collapsed,
-  collapseIconHtml,
-}: PatternPanelRenderOptions): string => `
-  <article class="panel pattern-panel editor-panel-shell${collapsed ? ' is-collapsed' : ''}">
-    <div class="panel-head compact panel-head--section">
-      <div class="panel-heading-copy">
-        <button type="button" class="section-heading-button" data-action="toggle-section-editor" aria-expanded="${collapsed ? 'false' : 'true'}">
-          <span class="section-heading-button__copy">
-            <span class="panel-label">Pattern editor</span>
-          </span>
-          <span class="section-heading-button__icon" aria-hidden="true">${collapseIconHtml}</span>
-        </button>
-      </div>
-      <div class="panel-head-actions">
-        <div class="octave-control">
-          <span class="octave-label">Octave</span>
-          <button type="button" class="icon-button icon-button--octave${octaveOneActive ? ' is-active' : ''}" data-action="octave-set-1" aria-pressed="${octaveOneActive ? 'true' : 'false'}">1</button>
-          <button type="button" class="icon-button icon-button--octave${octaveTwoActive ? ' is-active' : ''}" data-action="octave-set-2" aria-pressed="${octaveTwoActive ? 'true' : 'false'}">2</button>
-          <span class="sr-only" data-role="octave-value">Octave ${octave}</span>
-        </div>
-      </div>
-    </div>
-    <div class="panel-body">
-      <div class="pattern-header">
-        <span>Row</span>
-        <div style="display: contents" data-role="pattern-track-headers-host"></div>
-      </div>
-      <div class="pattern-canvas-host" data-role="pattern-host"></div>
-    </div>
-  </article>
-`;
