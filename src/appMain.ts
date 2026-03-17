@@ -242,9 +242,9 @@ export class TrackerApplication {
   private shellHost: HTMLElement | null = null;
   private layoutRefreshFrame: number | null = null;
   private playbackFrame: number | null = null;
-  private playbackDelayTimer: number | null = null;
   private playbackTickActive = false;
   private lastPlaybackCoordinatorAt: number | null = null;
+  private lastLiveStateSyncAt: number | null = null;
   private lastVisualizationFrameAt: number | null = null;
   private lastLiveStateVersion = -1;
   private lastAppliedLiveStateVersion = -1;
@@ -1081,13 +1081,10 @@ export class TrackerApplication {
       window.cancelAnimationFrame(this.playbackFrame);
       this.playbackFrame = null;
     }
-    if (this.playbackDelayTimer !== null) {
-      window.clearTimeout(this.playbackDelayTimer);
-      this.playbackDelayTimer = null;
-    }
 
     this.playbackTickActive = false;
     this.lastPlaybackCoordinatorAt = null;
+    this.lastLiveStateSyncAt = null;
     this.lastVisualizationFrameAt = null;
   }
 
@@ -1447,29 +1444,25 @@ export class TrackerApplication {
   }
 
   private ensurePlaybackCoordinator(): void {
-    if (this.playbackFrame !== null || this.playbackDelayTimer !== null || this.playbackTickActive || !this.hasPlaybackActivity()) {
+    if (this.playbackFrame !== null || this.playbackTickActive || !this.hasPlaybackActivity()) {
       return;
     }
 
-    const scheduleNextTick = (delayMs: number): void => {
-      const safeDelayMs = Math.max(0, delayMs);
-      if (safeDelayMs <= 1) {
-        this.playbackFrame = window.requestAnimationFrame(tick);
+    const tick = (now: number): void => {
+      this.playbackFrame = null;
+
+      if (this.lastPlaybackCoordinatorAt !== null && now - this.lastPlaybackCoordinatorAt < PLAYBACK_FRAME_INTERVAL_MS) {
+        if (this.hasPlaybackActivity()) {
+          this.playbackFrame = window.requestAnimationFrame(tick);
+        }
         return;
       }
 
-      this.playbackDelayTimer = window.setTimeout(() => {
-        this.playbackDelayTimer = null;
-        this.playbackFrame = window.requestAnimationFrame(tick);
-      }, safeDelayMs);
-    };
-
-    const tick = (now: number): void => {
       const stop = uiPerfMonitor.begin('playback.tick');
       uiPerfMonitor.setTag('hidden', typeof document !== 'undefined' && document.hidden ? '1' : '0');
       uiPerfMonitor.setTag('view', this.viewMode);
       this.playbackTickActive = true;
-      this.playbackFrame = null;
+      this.lastPlaybackCoordinatorAt = now;
       if (!this.snapshot || !this.engine) {
         this.playbackTickActive = false;
         this.stopPlaybackCoordinator();
@@ -1489,9 +1482,9 @@ export class TrackerApplication {
       const shouldSyncLiveState = this.snapshot.transport.playing;
       if (
         shouldSyncLiveState
-        && (this.lastPlaybackCoordinatorAt === null || now - this.lastPlaybackCoordinatorAt >= liveCadenceMs)
+        && (this.lastLiveStateSyncAt === null || now - this.lastLiveStateSyncAt >= liveCadenceMs)
       ) {
-        this.lastPlaybackCoordinatorAt = now;
+        this.lastLiveStateSyncAt = now;
         const liveState = uiPerfMonitor.measure('playback.getLiveState', () => this.engine!.getLiveState());
         if (liveState && liveState.version !== this.lastLiveStateVersion) {
           const previousPattern = this.snapshot.pattern.index;
@@ -1525,9 +1518,8 @@ export class TrackerApplication {
       }
 
       if (this.hasPlaybackActivity()) {
-        const nextDelayMs = Math.max(0, PLAYBACK_FRAME_INTERVAL_MS - (performance.now() - now));
         this.playbackTickActive = false;
-        scheduleNextTick(nextDelayMs);
+        this.playbackFrame = window.requestAnimationFrame(tick);
       } else {
         this.playbackTickActive = false;
         this.stopPlaybackCoordinator();
@@ -1535,7 +1527,7 @@ export class TrackerApplication {
       stop();
     };
 
-    scheduleNextTick(0);
+    this.playbackFrame = window.requestAnimationFrame(tick);
   }
 
   private drawQuadrascopeStack(quadrascope: QuadrascopeState | null): void {
