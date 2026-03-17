@@ -67,8 +67,12 @@ import {
   updateClassicDomDebugPointer,
 } from './ui-modern/classic/classicBridgeController';
 import {
-  renderAppShellMarkup,
-  renderPatternEditorPanel,
+  type IconButtonRenderOptions,
+  type PatternPanelRenderOptions,
+  type ModuleCardRenderOptions,
+  type ToolIconButtonRenderOptions,
+  type ToolbarButtonRenderOptions,
+  type SampleBankRenderOptions,
 } from './ui-modern/components/appShellRenderer';
 import {
   getSampleCardLabel as getModernSampleCardLabel,
@@ -83,11 +87,16 @@ import {
   renderSampleBank as renderModernSampleBank,
   renderSampleEditorPanel as renderModernSampleEditorPanel,
   renderSelectedSamplePanel as renderModernSelectedSamplePanel,
+  type SampleEditorPanelRenderOptions,
+  type SelectedSamplePanelRenderOptions,
   renderToolIconButton as renderModernToolIconButton,
   renderToolbarButton as renderModernToolbarButton,
   renderTrackHeader as renderModernTrackHeader,
 } from './ui-modern/components/markupRenderer';
 import { renderSampleCreatorWorkspace as renderModernSampleCreatorWorkspace } from './ui-modern/components/sampleCreatorRenderer';
+import { renderAppShellView } from './ui-vue/renderers/renderAppShellView';
+import { renderSampleBankView } from './ui-vue/renderers/renderSampleBankView';
+import { renderSelectedSamplePanelView } from './ui-vue/renderers/renderSelectedSamplePanelView';
 import {
   drawPatternCanvas as drawModernPatternCanvas,
   getPatternCanvasLayout as getModernPatternCanvasLayout,
@@ -478,6 +487,7 @@ export class TrackerApplication {
     const selectedSample = snapshot.samples[snapshot.selectedSample];
     const samplePage = this.resolveSamplePage(snapshot);
     const sampleButtons = this.renderSampleBank(snapshot, samplePage);
+    const sampleBankOptions = this.getSampleBankOptions(snapshot, samplePage);
     const workspaceMode = featureFlags.sample_composer ? this.workspaceMode : 'tracker';
     const sampleEditorOpen = snapshot.sampleEditor.open;
     if (!sampleEditorOpen) {
@@ -487,83 +497,73 @@ export class TrackerApplication {
     const shell = document.createElement('div');
     shell.className = `app-shell app-shell--${this.viewMode}`;
     document.body.dataset.viewMode = this.viewMode;
-    const moduleCardsHtml = [
-      this.renderModuleStepperCard('Position', String(snapshot.transport.position).padStart(2, '0'), 'position', 'song-position-down', 'song-position-up', this.canEditSnapshot(snapshot)),
-      this.renderModuleStepperCard('Pattern', String(snapshot.pattern.index).padStart(2, '0'), 'pattern', 'song-pattern-down', 'song-pattern-up', this.canEditSnapshot(snapshot)),
-      this.renderModuleStepperCard('Length', String(snapshot.song.length).padStart(2, '0'), 'length', 'song-length-down', 'song-length-up', this.canEditSnapshot(snapshot)),
-      this.renderModuleStepperCard('BPM', String(snapshot.transport.bpm), 'bpm', 'song-bpm-down', 'song-bpm-up', this.canEditSnapshot(snapshot)),
-      this.renderModuleValueCard('Time', formatSongTime(snapshot), 'time'),
-      this.renderModuleValueCard('Size', `${snapshot.song.sizeBytes} bytes`, 'size'),
-    ].join('');
-    const viewToggleHtml = [
-      this.renderToolbarButton('view-modern', Monitor, 'Modern', this.viewMode === 'modern'),
-      this.renderToolbarButton('view-classic', View, 'Classic', this.viewMode === 'classic'),
-    ].join('');
+    const moduleGridOptions = this.getModuleGridOptions(snapshot);
+    const moduleCardsHtml = moduleGridOptions.cards
+      .map((card) => card.kind === 'stepper'
+        ? this.renderModuleStepperCard(card.label, card.value, card.role, card.downAction, card.upAction, card.enabled, card.downIconHtml, card.upIconHtml)
+        : this.renderModuleValueCard(card.label, card.value, card.role))
+      .join('');
+    const viewToggleOptions = this.getViewToggleOptions();
+    const viewToggleHtml = viewToggleOptions
+      .map((button) => this.renderToolbarButton(button.action, button.iconHtml, button.label, button.active))
+      .join('');
     const playbackMode = snapshot.transport.playing ? snapshot.transport.mode : this.preferredTransportMode;
-    const transportControlsHtml = [
-      this.renderToolIconButton(
-        'transport-toggle-mode',
-        ArrowLeftRight,
-        playbackMode === 'pattern' ? 'Pattern playback' : 'Module playback',
-        playbackMode === 'pattern',
-        false,
-        'module-transport-mode',
-        playbackMode === 'pattern' ? 'P' : 'M',
-      ),
-      this.renderToolIconButton(
-        'transport-toggle',
-        snapshot.transport.playing ? Pause : Play,
-        snapshot.transport.playing ? 'Pause playback' : (playbackMode === 'pattern' ? 'Play pattern' : 'Play module'),
-        snapshot.transport.playing,
-        false,
-        'module-transport-toggle',
-      ),
-      this.renderToolIconButton('transport-stop', Square, 'Stop', false, false, 'module-transport-stop'),
-      this.renderToolIconButton(
-        'audio-cycle-mode',
-        Volume2,
-        this.getAudioModeLabel(snapshot),
-        snapshot.audio.mode !== 'custom',
-        false,
-        'module-audio-mode',
-        this.getAudioModeValue(snapshot),
-      ),
-    ].join('');
+    const moduleTransportOptions = this.getModuleTransportOptions(snapshot, playbackMode);
+    const visualizationControlOptions = this.getVisualizationControlOptions();
+    const samplePageControlOptions = this.getSamplePageControlOptions(snapshot, samplePage);
+    const transportControlsHtml = moduleTransportOptions
+      .map((button) => this.renderToolIconButton(button.action, button.iconHtml, button.label, button.active, button.disabled, button.role ?? '', button.valueText ?? ''))
+      .join('');
     const trackHeadersHtml = [
       this.renderTrackHeader(0, snapshot),
       this.renderTrackHeader(1, snapshot),
       this.renderTrackHeader(2, snapshot),
       this.renderTrackHeader(3, snapshot),
     ].join('');
-    const editorPanelHtml = sampleEditorOpen
-      ? this.renderSampleEditorPanel(snapshot)
-      : renderPatternEditorPanel({
+    const sampleEditorPanelOptions = sampleEditorOpen
+      ? this.getSampleEditorPanelOptions(snapshot)
+      : null;
+    const patternEditorPanelOptions: PatternPanelRenderOptions | null = sampleEditorOpen
+      ? null
+      : {
         octave: this.keyboardOctave,
         octaveOneActive: this.keyboardOctave === 1,
         octaveTwoActive: this.keyboardOctave === 2,
         collapsed: this.collapsedSections.editor,
         collapseIconHtml: this.getSectionCollapseIcon('editor'),
         trackHeadersHtml,
-      });
+      };
+    const editorPanelHtml = sampleEditorOpen
+      ? ''
+      : '';
+    const selectedSamplePanelOptions = this.getSelectedSamplePanelOptions(selectedSample, snapshot);
 
-    shell.innerHTML = renderAppShellMarkup({
+    renderAppShellView(shell, {
       viewMode: this.viewMode,
       workspaceMode,
       viewToggleHtml,
+      viewToggleOptions,
       songTitleHtml: this.renderSongTitleHtml(snapshot),
       transportControlsHtml,
+      moduleTransportOptions,
       moduleCardsHtml,
+      moduleGridOptions,
       moduleCollapsed: this.collapsedSections.module,
       moduleCollapseIconHtml: this.getSectionCollapseIcon('module'),
       visualizationLabel: escapeHtml(getVisualizationLabel(this.visualizationMode)),
       visualizationPianoIconHtml: iconMarkup(Piano),
       visualizationPrevIconHtml: iconMarkup(ChevronLeft),
       visualizationNextIconHtml: iconMarkup(ChevronRight),
+      visualizationControlOptions,
       visualizationCollapsed: this.collapsedSections.visualization,
       visualizationCollapseIconHtml: this.getSectionCollapseIcon('visualization'),
       editorPanelHtml,
+      patternEditorPanelOptions,
+      sampleEditorPanelOptions,
       sampleButtonsHtml: sampleButtons,
-      selectedSamplePanelHtml: this.renderSelectedSamplePanel(selectedSample, snapshot),
+      sampleBankOptions,
+      selectedSamplePanelHtml: '',
+      selectedSamplePanelOptions,
       samplesCollapsed: this.collapsedSections.samples,
       samplesCollapseIconHtml: this.getSectionCollapseIcon('samples'),
       classicDebugHtml: this.renderClassicDebug(),
@@ -571,6 +571,7 @@ export class TrackerApplication {
       samplePageNextDisabled: samplePage >= this.getSamplePageCount(snapshot) - 1,
       samplePagePrevIconHtml: iconMarkup(ChevronLeft),
       samplePageNextIconHtml: iconMarkup(ChevronRight),
+      samplePageControlOptions,
       fileMenuOpen: this.openMenu === 'file',
       helpMenuOpen: this.openMenu === 'help',
       aboutOpen: this.aboutOpen,
@@ -720,6 +721,9 @@ export class TrackerApplication {
   }
 
   private renderToolbarButton(action: string, iconNode: unknown, label: string, active = false): string {
+    if (typeof iconNode === 'string') {
+      return renderModernToolbarButton(action, iconNode, label, active);
+    }
     return renderModernToolbarButton(action, iconMarkup(iconNode), label, active);
   }
 
@@ -732,6 +736,9 @@ export class TrackerApplication {
     role = '',
     valueText = '',
   ): string {
+    if (typeof iconNode === 'string') {
+      return renderModernToolIconButton(action, iconNode, label, active, disabled, role, valueText);
+    }
     return renderModernToolIconButton(action, iconMarkup(iconNode), label, active, disabled, role, valueText);
   }
 
@@ -1091,12 +1098,178 @@ export class TrackerApplication {
     downAction: string,
     upAction: string,
     enabled: boolean,
+    downIconHtml = iconMarkup(ChevronDown),
+    upIconHtml = iconMarkup(ChevronUp),
   ): string {
-    return renderModernModuleStepperCard(label, value, role, downAction, upAction, enabled, iconMarkup(ChevronDown), iconMarkup(ChevronUp));
+    return renderModernModuleStepperCard(label, value, role, downAction, upAction, enabled, downIconHtml, upIconHtml);
   }
 
   private renderModuleValueCard(label: string, value: string, role: string): string {
     return renderModernModuleValueCard(label, value, role);
+  }
+
+  private getViewToggleOptions(): ToolbarButtonRenderOptions[] {
+    return [
+      {
+        action: 'view-modern',
+        iconHtml: iconMarkup(Monitor),
+        label: 'Modern',
+        active: this.viewMode === 'modern',
+      },
+      {
+        action: 'view-classic',
+        iconHtml: iconMarkup(View),
+        label: 'Classic',
+        active: this.viewMode === 'classic',
+      },
+    ];
+  }
+
+  private getModuleTransportOptions(
+    snapshot: TrackerSnapshot,
+    playbackMode: TransportMode,
+  ): ToolIconButtonRenderOptions[] {
+    return [
+      {
+        action: 'transport-toggle-mode',
+        iconHtml: iconMarkup(ArrowLeftRight),
+        label: playbackMode === 'pattern' ? 'Pattern playback' : 'Module playback',
+        active: playbackMode === 'pattern',
+        disabled: false,
+        role: 'module-transport-mode',
+        valueText: playbackMode === 'pattern' ? 'P' : 'M',
+      },
+      {
+        action: 'transport-toggle',
+        iconHtml: iconMarkup(snapshot.transport.playing ? Pause : Play),
+        label: snapshot.transport.playing ? 'Pause playback' : (playbackMode === 'pattern' ? 'Play pattern' : 'Play module'),
+        active: snapshot.transport.playing,
+        disabled: false,
+        role: 'module-transport-toggle',
+      },
+      {
+        action: 'transport-stop',
+        iconHtml: iconMarkup(Square),
+        label: 'Stop',
+        active: false,
+        disabled: false,
+        role: 'module-transport-stop',
+      },
+      {
+        action: 'audio-cycle-mode',
+        iconHtml: iconMarkup(Volume2),
+        label: this.getAudioModeLabel(snapshot),
+        active: snapshot.audio.mode !== 'custom',
+        disabled: false,
+        role: 'module-audio-mode',
+        valueText: this.getAudioModeValue(snapshot),
+      },
+    ];
+  }
+
+  private getModuleGridOptions(snapshot: TrackerSnapshot): { cards: ModuleCardRenderOptions[] } {
+    const editable = this.canEditSnapshot(snapshot);
+    return {
+      cards: [
+        {
+          kind: 'stepper',
+          label: 'Position',
+          value: String(snapshot.transport.position).padStart(2, '0'),
+          role: 'position',
+          downAction: 'song-position-down',
+          upAction: 'song-position-up',
+          enabled: editable,
+          downIconHtml: iconMarkup(ChevronDown),
+          upIconHtml: iconMarkup(ChevronUp),
+        },
+        {
+          kind: 'stepper',
+          label: 'Pattern',
+          value: String(snapshot.pattern.index).padStart(2, '0'),
+          role: 'pattern',
+          downAction: 'song-pattern-down',
+          upAction: 'song-pattern-up',
+          enabled: editable,
+          downIconHtml: iconMarkup(ChevronDown),
+          upIconHtml: iconMarkup(ChevronUp),
+        },
+        {
+          kind: 'stepper',
+          label: 'Length',
+          value: String(snapshot.song.length).padStart(2, '0'),
+          role: 'length',
+          downAction: 'song-length-down',
+          upAction: 'song-length-up',
+          enabled: editable,
+          downIconHtml: iconMarkup(ChevronDown),
+          upIconHtml: iconMarkup(ChevronUp),
+        },
+        {
+          kind: 'stepper',
+          label: 'BPM',
+          value: String(snapshot.transport.bpm),
+          role: 'bpm',
+          downAction: 'song-bpm-down',
+          upAction: 'song-bpm-up',
+          enabled: editable,
+          downIconHtml: iconMarkup(ChevronDown),
+          upIconHtml: iconMarkup(ChevronUp),
+        },
+        {
+          kind: 'value',
+          label: 'Time',
+          value: formatSongTime(snapshot),
+          role: 'time',
+        },
+        {
+          kind: 'value',
+          label: 'Size',
+          value: `${snapshot.song.sizeBytes} bytes`,
+          role: 'size',
+        },
+      ],
+    };
+  }
+
+  private getVisualizationControlOptions(): IconButtonRenderOptions[] {
+    return [
+      {
+        action: 'visualization-piano',
+        iconHtml: iconMarkup(Piano),
+        label: 'Show piano visualization',
+      },
+      {
+        action: 'visualization-prev',
+        iconHtml: iconMarkup(ChevronLeft),
+        label: 'Previous visualization',
+      },
+      {
+        action: 'visualization-next',
+        iconHtml: iconMarkup(ChevronRight),
+        label: 'Next visualization',
+      },
+    ];
+  }
+
+  private getSamplePageControlOptions(
+    snapshot: TrackerSnapshot,
+    samplePage: number,
+  ): IconButtonRenderOptions[] {
+    const pageCount = this.getSamplePageCount(snapshot);
+    return [
+      {
+        action: 'sample-page-prev',
+        iconHtml: iconMarkup(ChevronLeft),
+        label: 'Previous sample page',
+        disabled: samplePage <= 0,
+      },
+      {
+        action: 'sample-page-next',
+        iconHtml: iconMarkup(ChevronRight),
+        label: 'Next sample page',
+        disabled: samplePage >= pageCount - 1,
+      },
+    ];
   }
 
   private renderTrackHeader(channel: number, snapshot: TrackerSnapshot): string {
@@ -1729,6 +1902,19 @@ export class TrackerApplication {
     return getModernSamplePanelKey(snapshot, samplePage, SAMPLE_PAGE_SIZE);
   }
 
+  private getSampleBankOptions(snapshot: TrackerSnapshot, samplePage: number): SampleBankRenderOptions {
+    const start = samplePage * SAMPLE_PAGE_SIZE;
+    return {
+      items: snapshot.samples
+        .slice(start, start + SAMPLE_PAGE_SIZE)
+        .map((sample) => ({
+          sample,
+          selectedSample: snapshot.selectedSample,
+          previewValues: this.getPreviewSource(sample),
+        })),
+    };
+  }
+
   private renderSampleBank(snapshot: TrackerSnapshot, samplePage: number): string {
     return renderModernSampleBank(
       snapshot,
@@ -1752,7 +1938,14 @@ export class TrackerApplication {
   }
 
   private renderSelectedSamplePanel(sample: SampleSlot, snapshot: TrackerSnapshot): string {
-    return renderModernSelectedSamplePanel({
+    return renderModernSelectedSamplePanel(this.getSelectedSamplePanelOptions(sample, snapshot));
+  }
+
+  private getSelectedSamplePanelOptions(
+    sample: SampleSlot,
+    snapshot: TrackerSnapshot,
+  ): SelectedSamplePanelRenderOptions {
+    return {
       sample,
       editable: this.canEditSnapshot(snapshot),
       samplePreviewPlaying: this.samplePreviewPlaying,
@@ -1762,7 +1955,7 @@ export class TrackerApplication {
       editIconHtml: iconMarkup(PencilLine),
       replaceIconHtml: iconMarkup(FileUp),
       createIconHtml: iconMarkup(Piano),
-    });
+    };
   }
 
   private renderSampleCreatorWorkspace(snapshot: TrackerSnapshot): string {
@@ -1792,7 +1985,11 @@ export class TrackerApplication {
   }
 
   private renderSampleEditorPanel(snapshot: TrackerSnapshot): string {
-    return renderModernSampleEditorPanel({
+    return renderModernSampleEditorPanel(this.getSampleEditorPanelOptions(snapshot));
+  }
+
+  private getSampleEditorPanelOptions(snapshot: TrackerSnapshot): SampleEditorPanelRenderOptions {
+    return {
       snapshot,
       editable: this.canEditSnapshot(snapshot),
       samplePreviewPlaying: this.samplePreviewPlaying,
@@ -1816,7 +2013,7 @@ export class TrackerApplication {
       fineTuneEditOpen: this.sampleEditorNumberEdit?.field === 'fineTune',
       volumeEditValue: this.sampleEditorNumberEdit?.field === 'volume' ? this.sampleEditorNumberEdit.value : String(snapshot.samples[snapshot.selectedSample].volume),
       fineTuneEditValue: this.sampleEditorNumberEdit?.field === 'fineTune' ? this.sampleEditorNumberEdit.value : String(snapshot.samples[snapshot.selectedSample].fineTune),
-    });
+    };
   }
 
   private renderClassicDebug(): string {
@@ -2915,7 +3112,13 @@ export class TrackerApplication {
       getSamplePanelKey: (nextSnapshot, samplePage) => this.getSamplePanelKey(nextSnapshot, samplePage),
       getSelectedSampleHeading: (sample) => this.getSelectedSampleHeading(sample),
       renderSampleBank: (nextSnapshot, samplePage) => this.renderSampleBank(nextSnapshot, samplePage),
+      mountSampleBank: (container, nextSnapshot, samplePage) => {
+        renderSampleBankView(container, this.getSampleBankOptions(nextSnapshot, samplePage));
+      },
       renderSelectedSamplePanel: (sample, nextSnapshot) => this.renderSelectedSamplePanel(sample, nextSnapshot),
+      mountSelectedSamplePanel: (container, sample, nextSnapshot) => {
+        renderSelectedSamplePanelView(container, this.getSelectedSamplePanelOptions(sample, nextSnapshot));
+      },
       renderSelectedSampleTitle: (_sample) => this.renderSampleTitleHtml(snapshot),
       syncSelectedSampleTitle: this.renameState?.kind !== 'sample',
     });

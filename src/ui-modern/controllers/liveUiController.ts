@@ -62,7 +62,9 @@ export interface SamplePanelUpdateOptions {
   getSamplePanelKey: (snapshot: TrackerSnapshot, samplePage: number) => string;
   getSelectedSampleHeading: (sample: SampleSlot) => string;
   renderSampleBank: (snapshot: TrackerSnapshot, samplePage: number) => string;
+  mountSampleBank?: (container: HTMLElement, snapshot: TrackerSnapshot, samplePage: number) => void;
   renderSelectedSamplePanel: (sample: SampleSlot, snapshot: TrackerSnapshot) => string;
+  mountSelectedSamplePanel?: (container: HTMLElement, sample: SampleSlot, snapshot: TrackerSnapshot) => void;
   renderSelectedSampleTitle?: (sample: SampleSlot) => string;
   syncSelectedSampleTitle?: boolean;
 }
@@ -78,7 +80,9 @@ export const updateSamplePanel = ({
   getSamplePanelKey,
   getSelectedSampleHeading,
   renderSampleBank,
+  mountSampleBank,
   renderSelectedSamplePanel,
+  mountSelectedSamplePanel,
   renderSelectedSampleTitle,
   syncSelectedSampleTitle = true,
 }: SamplePanelUpdateOptions): string => {
@@ -129,12 +133,20 @@ export const updateSamplePanel = ({
 
   const bank = refs.sampleBank;
   if (bank) {
-    bank.innerHTML = renderSampleBank(snapshot, samplePage);
+    if (mountSampleBank) {
+      mountSampleBank(bank, snapshot, samplePage);
+    } else {
+      bank.innerHTML = renderSampleBank(snapshot, samplePage);
+    }
   }
 
   const detail = refs.sampleDetailContent;
   if (detail) {
-    detail.innerHTML = renderSelectedSamplePanel(selectedSample, snapshot);
+    if (mountSelectedSamplePanel) {
+      mountSelectedSamplePanel(detail, selectedSample, snapshot);
+    } else {
+      detail.innerHTML = renderSelectedSamplePanel(selectedSample, snapshot);
+    }
     const previewHost = detail.querySelector<HTMLElement>('[data-role="sample-preview-host"]');
     if (previewHost) {
       previewHost.replaceChildren(samplePreviewCanvas);

@@ -2,6 +2,11 @@
 
 declare const __APP_VERSION__: string;
 
+declare module '*.vue' {
+  const component: unknown;
+  export default component;
+}
+
 interface MIDIInput extends EventTarget {
   onmidimessage: ((event: MIDIMessageEvent) => void) | null;
 }

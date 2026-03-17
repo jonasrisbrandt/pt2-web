@@ -1,21 +1,95 @@
+import type { SampleSlot } from '../../core/trackerTypes';
+import type { SelectedSamplePanelRenderOptions } from './markupRenderer';
+
+export interface SampleBankRenderItem {
+  sample: SampleSlot;
+  selectedSample: number;
+  previewValues: ArrayLike<number>;
+}
+
+export interface SampleBankRenderOptions {
+  items: SampleBankRenderItem[];
+}
+
+export interface ToolbarButtonRenderOptions {
+  action: string;
+  iconHtml: string;
+  label: string;
+  active: boolean;
+}
+
+export interface ToolIconButtonRenderOptions {
+  action: string;
+  iconHtml: string;
+  label: string;
+  active: boolean;
+  disabled: boolean;
+  role?: string;
+  valueText?: string;
+}
+
+export interface IconButtonRenderOptions {
+  action: string;
+  iconHtml: string;
+  label: string;
+  disabled?: boolean;
+  small?: boolean;
+  active?: boolean;
+}
+
+export interface ModuleStepperCardRenderOptions {
+  kind: 'stepper';
+  label: string;
+  value: string;
+  role: string;
+  downAction: string;
+  upAction: string;
+  enabled: boolean;
+  downIconHtml: string;
+  upIconHtml: string;
+}
+
+export interface ModuleValueCardRenderOptions {
+  kind: 'value';
+  label: string;
+  value: string;
+  role: string;
+}
+
+export type ModuleCardRenderOptions =
+  | ModuleStepperCardRenderOptions
+  | ModuleValueCardRenderOptions;
+
+export interface ModuleGridRenderOptions {
+  cards: ModuleCardRenderOptions[];
+}
+
 export interface AppShellRenderOptions {
   viewMode: 'modern' | 'classic';
   workspaceMode?: 'tracker' | 'sample-creator';
   viewToggleHtml: string;
+  viewToggleOptions?: ToolbarButtonRenderOptions[] | null;
   songTitleHtml: string;
   transportControlsHtml: string;
+  moduleTransportOptions?: ToolIconButtonRenderOptions[] | null;
   moduleCardsHtml: string;
+  moduleGridOptions?: ModuleGridRenderOptions | null;
   moduleCollapsed: boolean;
   moduleCollapseIconHtml: string;
   visualizationLabel: string;
   visualizationPianoIconHtml: string;
   visualizationPrevIconHtml: string;
   visualizationNextIconHtml: string;
+  visualizationControlOptions?: IconButtonRenderOptions[] | null;
   visualizationCollapsed: boolean;
   visualizationCollapseIconHtml: string;
   editorPanelHtml: string;
+  patternEditorPanelOptions?: PatternPanelRenderOptions | null;
+  sampleEditorPanelOptions?: import('./markupRenderer').SampleEditorPanelRenderOptions | null;
   sampleButtonsHtml: string;
+  sampleBankOptions?: SampleBankRenderOptions | null;
   selectedSamplePanelHtml: string;
+  selectedSamplePanelOptions?: SelectedSamplePanelRenderOptions | null;
   samplesCollapsed: boolean;
   samplesCollapseIconHtml: string;
   classicDebugHtml: string;
@@ -23,6 +97,7 @@ export interface AppShellRenderOptions {
   samplePageNextDisabled: boolean;
   samplePagePrevIconHtml: string;
   samplePageNextIconHtml: string;
+  samplePageControlOptions?: IconButtonRenderOptions[] | null;
   fileMenuOpen: boolean;
   helpMenuOpen: boolean;
   aboutOpen: boolean;
