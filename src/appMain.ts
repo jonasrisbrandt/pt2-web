@@ -103,12 +103,12 @@ import {
   drawPianoVisualizer as drawModernPianoVisualizer,
   drawQuadrascopeClassic as drawModernQuadrascopeClassic,
   drawQuadrascopeStack as drawModernQuadrascopeStack,
-  drawSignalTrails as drawModernSignalTrails,
-  drawSpectrumAnalyzer as drawModernSpectrumAnalyzer,
   syncPianoNotes as syncModernPianoNotes,
   triggerPianoGlow as triggerModernPianoGlow,
 } from './ui-modern/components/visualizationRenderer';
 import { createTrackerAppDom } from './ui-modern/session/appDom';
+import { TrackerSignalTrailsFrameSource, TrackerSpectrumFrameSource } from './visualization-adapters/trackerVisualizationAdapter';
+import { VisualizationEngine } from './visualization-engine/engine';
 import { TrackerRuntime } from './trackerRuntime';
 
 declare const __APP_VERSION__: string;
@@ -209,6 +209,10 @@ export class TrackerApplication {
   private readonly spectrumCanvas: HTMLCanvasElement;
   private readonly trailsCanvas: HTMLCanvasElement;
   private readonly pianoCanvas: HTMLCanvasElement;
+  private readonly spectrumVisualizationEngine: VisualizationEngine;
+  private readonly signalTrailsVisualizationEngine: VisualizationEngine;
+  private readonly spectrumFrameSource = new TrackerSpectrumFrameSource();
+  private readonly signalTrailsFrameSource = new TrackerSignalTrailsFrameSource();
   private engine: TrackerEngine | null = null;
   private synthEngine: SynthEngine | null = null;
   private snapshot: TrackerSnapshot | null = null;
@@ -292,7 +296,6 @@ export class TrackerApplication {
     inside: false,
     events: 0,
   };
-  private trailColumns: number[][] = Array.from({ length: 4 }, () => []);
 
   constructor(root: HTMLElement, config: EngineConfig) {
     this.root = root;
@@ -359,6 +362,18 @@ export class TrackerApplication {
     this.spectrumCanvas = dom.spectrumCanvas;
     this.trailsCanvas = dom.trailsCanvas;
     this.pianoCanvas = dom.pianoCanvas;
+    this.spectrumVisualizationEngine = new VisualizationEngine({
+      canvas: this.spectrumCanvas,
+      minWidth: 220,
+      logicalHeight: SPECTRUM_HEIGHT,
+      preferredBackend: 'webgl2',
+    });
+    this.signalTrailsVisualizationEngine = new VisualizationEngine({
+      canvas: this.trailsCanvas,
+      minWidth: 220,
+      logicalHeight: QUADRASCOPE_HEIGHT,
+      preferredBackend: 'webgl2',
+    });
 
     this.root.append(this.moduleInput, this.sampleInput);
 
@@ -1041,9 +1056,7 @@ export class TrackerApplication {
       }
     }
 
-    for (let channel = 0; channel < this.trailColumns.length; channel += 1) {
-      this.trailColumns[channel].length = 0;
-    }
+    this.signalTrailsFrameSource.reset();
 
     if (redraw && this.snapshot && this.viewMode === 'modern') {
       this.drawVisualization(this.snapshot);
@@ -1502,26 +1515,18 @@ export class TrackerApplication {
     if (this.viewMode !== 'modern') {
       return;
     }
-    drawModernSpectrumAnalyzer({
-      canvas: this.spectrumCanvas,
-      quadrascope,
-      height: SPECTRUM_HEIGHT,
-      compact: this.visualizationMode === 'split',
-      drawRoundedRect: (ctx, x, y, width, height, radius) => this.drawRoundedRect(ctx, x, y, width, height, radius),
-    });
+    this.spectrumVisualizationEngine.render(
+      this.spectrumFrameSource.buildFrame(quadrascope, this.visualizationMode === 'split'),
+    );
   }
 
   private drawSignalTrails(quadrascope: QuadrascopeState | null): void {
     if (this.viewMode !== 'modern') {
       return;
     }
-    drawModernSignalTrails({
-      canvas: this.trailsCanvas,
-      quadrascope,
-      trailColumns: this.trailColumns,
-      height: QUADRASCOPE_HEIGHT,
-      drawRoundedRect: (ctx, x, y, width, height, radius) => this.drawRoundedRect(ctx, x, y, width, height, radius),
-    });
+    this.signalTrailsVisualizationEngine.render(
+      this.signalTrailsFrameSource.buildFrame(quadrascope),
+    );
   }
 
   private syncPianoNotes(snapshot: TrackerSnapshot, quadrascope: QuadrascopeState | null): void {
