@@ -2,6 +2,7 @@ import type {
   EngineConfig,
   EngineEvent,
   ExportedFile,
+  ImportedSample,
   QuadrascopeState,
   SampleExportFormat,
   TrackerCommand,
@@ -17,6 +18,7 @@ export interface TrackerEngine {
   saveModule(): Promise<ExportedFile>;
   loadSample(file: Uint8Array, name: string): Promise<void>;
   saveSample(slot: number, format: SampleExportFormat): Promise<ExportedFile>;
+  importSample(slot: number, sample: ImportedSample): void;
   setClassicRenderingActive(active: boolean): void;
   dispatch(command: TrackerCommand): void;
   setTransport(command: TransportCommand): void;

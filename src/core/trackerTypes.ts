@@ -55,6 +55,15 @@ export interface SampleSlot {
   dataRevision: number;
 }
 
+export interface ImportedSample {
+  name: string;
+  data: Int8Array;
+  volume: number;
+  fineTune: number;
+  loopStart: number;
+  loopLength: number;
+}
+
 export interface QuadrascopeChannel {
   active: boolean;
   volume: number;

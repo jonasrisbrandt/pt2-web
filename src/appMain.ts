@@ -1,7 +1,11 @@
 import { createElement, ArrowLeft, ArrowLeftRight, ArrowUpDown, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Crop, FileUp, Focus, Monitor, Pause, PencilLine, Piano, Play, Repeat, Scissors, SlidersHorizontal, Square, View, Volume2, VolumeX } from 'lucide';
 import { createTrackerEngine } from './core/createEngine';
+import { createSynthEngine } from './core/createSynthEngine';
+import { featureFlags } from './config/featureFlags';
 import { translateClassicKeyboardEvent, type ClassicKeyTranslation } from './core/classicKeyboard';
 import { getKeyboardNoteFromKey, interpretKeyboard, isEditableTarget } from './core/keyboard';
+import { RenderedAudioPreview } from './core/renderedAudioPreview';
+import type { SynthEngine } from './core/synthEngine';
 import type { TrackerEngine } from './core/trackerEngine';
 import type {
   CursorField,
@@ -13,6 +17,7 @@ import type {
   TransportMode,
   TrackerSnapshot,
 } from './core/trackerTypes';
+import type { RenderJob, SynthId, SynthParamId, SynthSnapshot } from './core/synthTypes';
 import {
   escapeHtml,
   formatCellNote,
@@ -82,6 +87,7 @@ import {
   renderToolbarButton as renderModernToolbarButton,
   renderTrackHeader as renderModernTrackHeader,
 } from './ui-modern/components/markupRenderer';
+import { renderSampleCreatorWorkspace as renderModernSampleCreatorWorkspace } from './ui-modern/components/sampleCreatorRenderer';
 import {
   drawPatternCanvas as drawModernPatternCanvas,
   getPatternCanvasLayout as getModernPatternCanvasLayout,
@@ -126,6 +132,9 @@ type SectionKey = 'module' | 'visualization' | 'editor' | 'samples';
 type MenuKey = 'file' | 'help';
 type SampleEditorPopoverKey = 'volume' | 'fineTune';
 type SampleEditorNumericField = 'volume' | 'fineTune';
+type WorkspaceMode = 'tracker' | 'sample-creator';
+
+interface SampleCreatorRenderState extends RenderJob {}
 
 interface InlineRenameState {
   kind: 'song' | 'sample';
@@ -219,11 +228,14 @@ export class TrackerApplication {
   private readonly trailsCanvas: HTMLCanvasElement;
   private readonly pianoCanvas: HTMLCanvasElement;
   private engine: TrackerEngine | null = null;
+  private synthEngine: SynthEngine | null = null;
   private snapshot: TrackerSnapshot | null = null;
+  private synthSnapshot: SynthSnapshot | null = null;
   private quadrascope: QuadrascopeState | null = null;
   private statusMessage = DEFAULT_STATUS;
   private keyboardOctave = 2;
   private viewMode: 'modern' | 'classic' = 'modern';
+  private workspaceMode: WorkspaceMode = 'tracker';
   private visualizationMode: VisualizationMode = 'quad-classic';
   private preferredTransportMode: TransportMode = 'song';
   private samplePage = 0;
@@ -249,6 +261,21 @@ export class TrackerApplication {
   private sampleEditorNumberEdit: InlineSampleNumberState | null = null;
   private pendingSampleNumberFocus: SampleEditorNumericField | null = null;
   private suppressNextModernRender = false;
+  private sampleCreatorState: SampleCreatorRenderState = {
+    midiNote: 48,
+    velocity: 1,
+    durationSeconds: 0.7,
+    tailSeconds: 0.25,
+    sampleRate: 22050,
+    normalize: true,
+    fadeOut: true,
+    targetSlot: 0,
+    sampleName: 'core-sub',
+    volume: 64,
+    fineTune: 0,
+    loopStart: 0,
+    loopLength: 2,
+  };
   private collapsedSections: Record<SectionKey, boolean> = {
     module: false,
     visualization: false,
@@ -268,9 +295,14 @@ export class TrackerApplication {
   private pianoGlowLevels: number[][] = Array.from({ length: 4 }, () => Array.from({ length: PIANO_END_ABSOLUTE + 1 }, () => 0));
   private pianoLastFrameAt: number | null = null;
   private modernNotePreviewActive = false;
+  private readonly synthPressedNoteKeys = new Map<string, number>();
+  private readonly synthRenderedPreview = new RenderedAudioPreview();
+  private sampleCreatorPointerNote: number | null = null;
   private readonly modernPressedNoteKeys = new Set<string>();
   private readonly modernRecentNoteKeyTimes = new Map<string, number>();
   private classicPressedKeys = new Map<string, ClassicKeyTranslation>();
+  private midiAccess: MIDIAccess | null = null;
+  private midiInputHandler: ((event: MIDIMessageEvent) => void) | null = null;
   private classicDomDebug = {
     x: 0,
     y: 0,
@@ -325,7 +357,9 @@ export class TrackerApplication {
         this.releaseClassicKeys();
         this.modernPressedNoteKeys.clear();
         this.modernRecentNoteKeyTimes.clear();
+        this.synthPressedNoteKeys.clear();
         this.stopModernNotePreview();
+        this.stopSynthPreview();
       },
       onClassicCanvasPointerMove: (event) => this.handleClassicCanvasPointerMove(event),
       onClassicCanvasPointerButtonDown: (event) => this.handleClassicCanvasPointerButton(event, true),
@@ -349,6 +383,7 @@ export class TrackerApplication {
       onWindowMouseUp: () => {
         this.handleSampleEditorPointerUp();
         this.stopModernNotePreview();
+        this.stopSampleCreatorPointerNote();
       },
     });
   }
@@ -356,6 +391,8 @@ export class TrackerApplication {
   async init(): Promise<void> {
     const { engine, warning } = await createTrackerEngine(this.config);
     this.engine = engine;
+    const { engine: synthEngine, warning: synthWarning } = await createSynthEngine();
+    this.synthEngine = synthEngine;
 
     this.engine.subscribe((event) => {
       if (event.type === 'snapshot') {
@@ -399,7 +436,26 @@ export class TrackerApplication {
       this.statusMessage = `Fell back to the mock engine: ${warning}`;
     }
 
+    this.synthEngine.subscribe((event) => {
+      if (event.type === 'snapshot') {
+        this.synthSnapshot = event.snapshot;
+        this.sampleCreatorState.targetSlot = event.snapshot.targetSampleSlot;
+        this.sampleCreatorState.sampleRate = event.snapshot.bakeSampleRate;
+      }
+
+      if (featureFlags.sample_composer && this.workspaceMode === 'sample-creator') {
+        this.render();
+      }
+    });
+
     this.snapshot = this.engine.getSnapshot();
+    this.synthSnapshot = this.synthEngine.getSnapshot();
+    this.sampleCreatorState.sampleRate = this.synthSnapshot.bakeSampleRate;
+    if (synthWarning && this.synthSnapshot) {
+      this.synthSnapshot.status = this.synthSnapshot.backend === 'mock'
+        ? `Debug fallback active: ${synthWarning}`
+        : synthWarning;
+    }
     this.quadrascope = this.snapshot.quadrascope ?? null;
     this.preferredTransportMode = this.snapshot.transport.mode;
     if (this.snapshot.editor.editMode !== !this.snapshot.transport.playing) {
@@ -409,6 +465,7 @@ export class TrackerApplication {
     this.syncClassicRenderingState();
     this.render();
     this.syncPlaybackCoordinator();
+    await this.initMidiAccess();
   }
 
   private render(): void {
@@ -421,6 +478,7 @@ export class TrackerApplication {
     const selectedSample = snapshot.samples[snapshot.selectedSample];
     const samplePage = this.resolveSamplePage(snapshot);
     const sampleButtons = this.renderSampleBank(snapshot, samplePage);
+    const workspaceMode = featureFlags.sample_composer ? this.workspaceMode : 'tracker';
     const sampleEditorOpen = snapshot.sampleEditor.open;
     if (!sampleEditorOpen) {
       this.openSampleEditorPopover = null;
@@ -490,6 +548,7 @@ export class TrackerApplication {
 
     shell.innerHTML = renderAppShellMarkup({
       viewMode: this.viewMode,
+      workspaceMode,
       viewToggleHtml,
       songTitleHtml: this.renderSongTitleHtml(snapshot),
       transportControlsHtml,
@@ -518,6 +577,7 @@ export class TrackerApplication {
       appVersion: __APP_VERSION__,
       fileActionsDisabled: snapshot.transport.playing,
       importDisabled: !this.canEditSnapshot(snapshot),
+      sampleCreatorHtml: workspaceMode === 'sample-creator' ? this.renderSampleCreatorWorkspace(snapshot) : '',
     });
 
     this.root.querySelector('.app-shell')?.remove();
@@ -1701,6 +1761,33 @@ export class TrackerApplication {
       stopIconHtml: iconMarkup(Square),
       editIconHtml: iconMarkup(PencilLine),
       replaceIconHtml: iconMarkup(FileUp),
+      createIconHtml: iconMarkup(Piano),
+    });
+  }
+
+  private renderSampleCreatorWorkspace(snapshot: TrackerSnapshot): string {
+    if (!featureFlags.sample_composer) {
+      return '';
+    }
+
+    const synthSnapshot = this.synthSnapshot;
+    if (!synthSnapshot) {
+      return `
+        <section class="sample-creator-workspace">
+          <div class="sample-creator-card">
+            <p class="panel-label">Sample Creator</p>
+            <h2 class="panel-title">Initializing synth engine...</h2>
+          </div>
+        </section>
+      `;
+    }
+
+    const targetSample = snapshot.samples[synthSnapshot.targetSampleSlot] ?? snapshot.samples[snapshot.selectedSample];
+    return renderModernSampleCreatorWorkspace({
+      snapshot: synthSnapshot,
+      targetSample,
+      keyboardOctave: this.keyboardOctave,
+      renderJob: this.sampleCreatorState,
     });
   }
 
@@ -1787,10 +1874,69 @@ export class TrackerApplication {
         this.aboutOpen = false;
         this.render();
         return;
+      case 'sample-creator-open':
+        if (!featureFlags.sample_composer) {
+          return;
+        }
+        if (this.snapshot && this.synthSnapshot) {
+          this.workspaceMode = 'sample-creator';
+          this.sampleCreatorState.targetSlot = this.snapshot.selectedSample;
+          this.sampleCreatorState.sampleName = (this.snapshot.samples[this.snapshot.selectedSample]?.name || this.synthSnapshot.selectedSynth).slice(0, 22);
+          this.synthEngine?.dispatch({ type: 'target-slot/set', slot: this.snapshot.selectedSample });
+          this.synthEngine?.dispatch({ type: 'bake-rate/set', sampleRate: this.sampleCreatorState.sampleRate });
+          this.render();
+        }
+        return;
+      case 'sample-creator-close':
+        this.workspaceMode = 'tracker';
+        this.stopSynthPreview();
+        this.render();
+        return;
     }
 
     if (!this.engine || !this.snapshot) {
       return;
+    }
+
+    if (this.synthEngine && this.synthSnapshot) {
+      switch (target.dataset.action) {
+        case 'sample-creator-arm-synth':
+          this.synthEngine.dispatch({ type: 'input-arm/set', target: 'synth' });
+          return;
+        case 'sample-creator-arm-tracker':
+          this.synthEngine.dispatch({ type: 'input-arm/set', target: 'tracker' });
+          return;
+        case 'sample-creator-select-synth': {
+          const synth = (target.dataset.synth === 'acid303' ? 'acid303' : 'core-sub') as SynthId;
+          this.synthEngine.dispatch({ type: 'synth/select', synth });
+          this.sampleCreatorState.sampleName = synth.slice(0, 22);
+          return;
+        }
+        case 'sample-creator-preview-note':
+          if (this.synthSnapshot.inputArm === 'tracker') {
+            this.recordTrackerMidiNote(this.sampleCreatorState.midiNote, this.sampleCreatorState.velocity);
+          } else {
+            void this.previewRenderedSynthNote();
+          }
+          return;
+        case 'sample-creator-stop':
+          this.stopSynthPreview();
+          return;
+        case 'sample-creator-record':
+          this.synthEngine.dispatch({ type: this.synthSnapshot.recordState === 'recording' ? 'record/stop' : 'record/start' });
+          return;
+        case 'sample-creator-discard-recording':
+          this.synthEngine.dispatch({ type: 'record/discard' });
+          return;
+        case 'sample-creator-commit-recording':
+          this.commitRecordedSampleCreatorSample();
+          return;
+        case 'sample-creator-bake':
+          await this.bakeSampleCreatorSample();
+          return;
+        case 'sample-creator-piano-note':
+          return;
+      }
     }
 
     if (
@@ -1835,10 +1981,14 @@ export class TrackerApplication {
         setSamplePreviewPlaying: (value) => { this.samplePreviewPlaying = value; },
         setSnapshot: (snapshot) => { this.snapshot = snapshot; },
         setViewMode: (mode) => { this.viewMode = mode; },
-        setVisualizationMode: (mode) => { this.visualizationMode = mode; },
+      setVisualizationMode: (mode) => { this.visualizationMode = mode; },
         shiftVisualization: (direction) => this.shiftVisualization(direction),
         updateModernLiveRegions: (snapshot) => this.updateModernLiveRegions(snapshot),
       });
+    if (this.synthEngine && this.snapshot) {
+      this.sampleCreatorState.targetSlot = this.snapshot.selectedSample;
+      this.synthEngine.dispatch({ type: 'target-slot/set', slot: this.snapshot.selectedSample });
+    }
     if (menuWasOpen) {
       this.openMenu = null;
       this.render();
@@ -1846,16 +1996,16 @@ export class TrackerApplication {
   }
 
   private async handleChange(event: Event): Promise<void> {
-    if (!(event.target instanceof HTMLInputElement)) {
+    if (!(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLSelectElement)) {
       return;
     }
 
-    if (event.target.dataset.inlineRename) {
+    if (event.target instanceof HTMLInputElement && event.target.dataset.inlineRename) {
       this.commitInlineRename();
       return;
     }
 
-    if (event.target.dataset.inlineSampleNumber) {
+    if (event.target instanceof HTMLInputElement && event.target.dataset.inlineSampleNumber) {
       this.commitSampleEditorNumberEdit();
       return;
     }
@@ -1896,11 +2046,11 @@ export class TrackerApplication {
   }
 
   private handleInput(event: Event): void {
-    if (!(event.target instanceof HTMLInputElement)) {
+    if (!(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLSelectElement)) {
       return;
     }
 
-    if (event.target.dataset.inlineRename) {
+    if (event.target instanceof HTMLInputElement && event.target.dataset.inlineRename) {
       if (this.renameState) {
         this.renameState = {
           ...this.renameState,
@@ -1910,7 +2060,7 @@ export class TrackerApplication {
       return;
     }
 
-    if (event.target.dataset.inlineSampleNumber) {
+    if (event.target instanceof HTMLInputElement && event.target.dataset.inlineSampleNumber) {
       if (this.sampleEditorNumberEdit) {
         this.sampleEditorNumberEdit = {
           ...this.sampleEditorNumberEdit,
@@ -1920,7 +2070,81 @@ export class TrackerApplication {
       return;
     }
 
+    if (this.synthEngine && event.target.dataset.input?.startsWith('sample-creator')) {
+      const inputKey = event.target.dataset.input;
+      switch (inputKey) {
+        case 'sample-creator-param':
+          if (!(event.target instanceof HTMLInputElement) || !event.target.dataset.param) {
+            return;
+          }
+          this.synthEngine.dispatch({
+            type: 'param/set',
+            id: event.target.dataset.param as SynthParamId,
+            value: Number(event.target.value),
+          });
+          return;
+        case 'sample-creator-preset':
+          if (!(event.target instanceof HTMLSelectElement)) {
+            return;
+          }
+          this.synthEngine.dispatch({ type: 'preset/load', presetId: event.target.value });
+          this.sampleCreatorState.sampleName = event.target.value.split(':')[1]?.slice(0, 22) ?? this.sampleCreatorState.sampleName;
+          return;
+        case 'sample-creator-name':
+          if (event.target instanceof HTMLInputElement) {
+            this.sampleCreatorState.sampleName = event.target.value.slice(0, 22);
+          }
+          return;
+        case 'sample-creator-duration':
+          if (event.target instanceof HTMLInputElement) {
+            this.sampleCreatorState.durationSeconds = clamp(Number(event.target.value), 0.05, 6);
+          }
+          return;
+        case 'sample-creator-tail':
+          if (event.target instanceof HTMLInputElement) {
+            this.sampleCreatorState.tailSeconds = clamp(Number(event.target.value), 0, 4);
+          }
+          return;
+        case 'sample-creator-note':
+          if (event.target instanceof HTMLInputElement) {
+            this.sampleCreatorState.midiNote = clamp(Number(event.target.value), 24, 96);
+          }
+          return;
+        case 'sample-creator-volume':
+          if (event.target instanceof HTMLInputElement) {
+            this.sampleCreatorState.volume = clamp(Number(event.target.value), 0, 64);
+          }
+          return;
+        case 'sample-creator-finetune':
+          if (event.target instanceof HTMLInputElement) {
+            this.sampleCreatorState.fineTune = clamp(Number(event.target.value), -8, 7);
+          }
+          return;
+        case 'sample-creator-normalize':
+          if (event.target instanceof HTMLInputElement) {
+            this.sampleCreatorState.normalize = event.target.checked;
+          }
+          return;
+        case 'sample-creator-fadeout':
+          if (event.target instanceof HTMLInputElement) {
+            this.sampleCreatorState.fadeOut = event.target.checked;
+          }
+          return;
+        case 'sample-creator-samplerate':
+          if (event.target instanceof HTMLSelectElement) {
+            const sampleRate = clamp(Number(event.target.value), 11025, 48000);
+            this.sampleCreatorState.sampleRate = sampleRate;
+            this.synthEngine.dispatch({ type: 'bake-rate/set', sampleRate });
+          }
+          return;
+      }
+    }
+
     if (!this.engine || !this.snapshot) {
+      return;
+    }
+
+    if (!(event.target instanceof HTMLInputElement)) {
       return;
     }
 
@@ -1977,11 +2201,25 @@ export class TrackerApplication {
   }
 
   private handleWindowPointerDown(event: MouseEvent): void {
-    if (!this.openMenu && !this.aboutOpen && !this.openSampleEditorPopover && !this.sampleEditorNumberEdit) {
+    const target = event.target instanceof Element ? event.target : null;
+    const sampleCreatorPianoTarget = target?.closest('[data-action="sample-creator-piano-note"]') as HTMLElement | null;
+    if (featureFlags.sample_composer && sampleCreatorPianoTarget && this.workspaceMode === 'sample-creator' && this.synthEngine && this.synthSnapshot) {
+      const midiNote = Number(sampleCreatorPianoTarget.dataset.midi);
+      if (Number.isFinite(midiNote)) {
+        event.preventDefault();
+        this.sampleCreatorPointerNote = midiNote;
+        if (this.synthSnapshot.inputArm === 'tracker') {
+          this.recordTrackerMidiNote(midiNote, this.sampleCreatorState.velocity);
+        } else {
+          void this.playSynthMidiNote(midiNote, this.sampleCreatorState.velocity);
+        }
+      }
       return;
     }
 
-    const target = event.target instanceof Element ? event.target : null;
+    if (!this.openMenu && !this.aboutOpen && !this.openSampleEditorPopover && !this.sampleEditorNumberEdit) {
+      return;
+    }
     if (this.openMenu && target && !target.closest('.menubar-shell')) {
       this.openMenu = null;
       this.render();
@@ -2036,6 +2274,191 @@ export class TrackerApplication {
 
     this.engine.dispatch({ type: 'note-preview/stop' });
     this.modernNotePreviewActive = false;
+  }
+
+  private stopSynthPreview(): void {
+    this.synthRenderedPreview.stopAll();
+    this.sampleCreatorPointerNote = null;
+    this.synthEngine?.dispatch({ type: 'preview/panic' });
+  }
+
+  private absoluteToTrackerNote(absolute: number): string {
+    const noteNames = ['C-', 'C#', 'D-', 'D#', 'E-', 'F-', 'F#', 'G-', 'G#', 'A-', 'A#', 'B-'];
+    const clamped = clamp(absolute, 12, 47);
+    return `${noteNames[clamped % 12]}${Math.floor(clamped / 12)}`;
+  }
+
+  private async playSynthMidiNote(midiNote: number, velocity = 1): Promise<void> {
+    if (!this.synthEngine) {
+      return;
+    }
+
+    try {
+      this.synthEngine.dispatch({ type: 'preview/note-on', midiNote, velocity });
+    } catch (error) {
+      console.error('Synth preview failed.', error);
+    }
+  }
+
+  private stopSynthMidiNote(midiNote: number): void {
+    this.synthEngine?.dispatch({ type: 'preview/note-off', midiNote });
+  }
+
+  private stopSampleCreatorPointerNote(): void {
+    if (this.sampleCreatorPointerNote === null) {
+      return;
+    }
+
+    const midiNote = this.sampleCreatorPointerNote;
+    this.sampleCreatorPointerNote = null;
+    if (this.synthSnapshot?.inputArm === 'synth') {
+      this.stopSynthMidiNote(midiNote);
+    }
+  }
+
+  private async previewRenderedSynthNote(): Promise<void> {
+    if (!this.synthEngine || !this.synthSnapshot) {
+      return;
+    }
+
+    try {
+      await this.synthRenderedPreview.prepare();
+      const rendered = await this.synthEngine.renderSample({
+        ...this.sampleCreatorState,
+        sampleRate: this.synthSnapshot.previewSampleRate ?? 48000,
+        normalize: false,
+        fadeOut: true,
+        sampleName: 'preview',
+      });
+      if (rendered.data.length === 0) {
+        console.warn('Synth one-shot preview returned no samples.');
+        return;
+      }
+      await this.synthRenderedPreview.play('sample-creator-one-shot', rendered);
+    } catch (error) {
+      console.error('Synth one-shot preview failed.', error);
+    }
+  }
+
+  private recordTrackerMidiNote(midiNote: number, velocity = 1): void {
+    if (!this.engine || !this.snapshot || this.snapshot.sampleEditor.open || !this.canEditSnapshot(this.snapshot)) {
+      return;
+    }
+
+    const note = this.absoluteToTrackerNote(midiNote);
+    const channel = this.snapshot.cursor.channel;
+    this.suppressNextModernRender = true;
+    this.engine.dispatch({
+      type: 'pattern/set-cell',
+      row: this.snapshot.cursor.row,
+      channel,
+      patch: { note },
+    });
+    this.previewModernNote(note, channel);
+    const absolute = noteToAbsolute(note);
+    if (absolute !== null) {
+      this.triggerPianoGlow(channel, absolute);
+    }
+    this.snapshot = this.engine.getSnapshot();
+    this.suppressNextModernRender = true;
+    this.moveModernCursor(this.snapshot.cursor.row + 1, channel, 'note');
+    this.updateModernLiveRegions(this.snapshot);
+    void velocity;
+  }
+
+  private async bakeSampleCreatorSample(): Promise<void> {
+    if (!this.synthEngine || !this.engine || !this.snapshot || !this.synthSnapshot) {
+      return;
+    }
+
+    const rendered = await this.synthEngine.renderSample({
+      ...this.sampleCreatorState,
+      sampleRate: this.synthSnapshot.bakeSampleRate,
+    });
+    this.engine.importSample(this.synthSnapshot.targetSampleSlot, rendered);
+    this.snapshot = this.engine.getSnapshot();
+    this.lastSelectedSample = this.snapshot.selectedSample;
+    this.invalidateSampleCache(this.snapshot.selectedSample);
+    this.refreshSelectedSampleWaveform(this.snapshot, true);
+    this.render();
+  }
+
+  private commitRecordedSampleCreatorSample(): void {
+    if (!this.synthEngine || !this.engine || !this.snapshot || !this.synthSnapshot) {
+      return;
+    }
+
+    const rendered = this.synthEngine.getRecordedSample({
+      ...this.sampleCreatorState,
+      sampleRate: this.synthSnapshot.bakeSampleRate,
+    });
+    if (!rendered) {
+      return;
+    }
+
+    this.engine.importSample(this.synthSnapshot.targetSampleSlot, rendered);
+    this.snapshot = this.engine.getSnapshot();
+    this.lastSelectedSample = this.snapshot.selectedSample;
+    this.invalidateSampleCache(this.snapshot.selectedSample);
+    this.refreshSelectedSampleWaveform(this.snapshot, true);
+    this.render();
+  }
+
+  private async initMidiAccess(): Promise<void> {
+    const requestMidi = (navigator as Navigator & { requestMIDIAccess?: () => Promise<MIDIAccess> }).requestMIDIAccess;
+    if (!requestMidi || !this.synthEngine) {
+      return;
+    }
+
+    try {
+      this.midiAccess = await requestMidi.call(navigator);
+      this.midiInputHandler = (event: MIDIMessageEvent) => this.handleMidiMessage(event);
+      for (const input of this.midiAccess.inputs.values()) {
+        input.onmidimessage = this.midiInputHandler;
+      }
+      this.midiAccess.onstatechange = () => {
+        if (!this.midiAccess || !this.midiInputHandler) {
+          return;
+        }
+
+        for (const input of this.midiAccess.inputs.values()) {
+          input.onmidimessage = this.midiInputHandler;
+        }
+        this.synthEngine?.dispatch({ type: 'midi/set-available', available: this.midiAccess.inputs.size > 0 });
+      };
+      this.synthEngine.dispatch({ type: 'midi/set-available', available: this.midiAccess.inputs.size > 0 });
+    } catch (error) {
+      console.warn('MIDI initialization failed.', error);
+      this.synthEngine.dispatch({ type: 'midi/set-available', available: false });
+    }
+  }
+
+  private handleMidiMessage(event: MIDIMessageEvent): void {
+    if (!this.synthSnapshot) {
+      return;
+    }
+
+    const message = event.data ?? new Uint8Array(0);
+    const [status = 0, data1 = 0, data2 = 0] = message;
+    const command = status & 0xf0;
+    const velocity = clamp(data2 / 127, 0.05, 1);
+
+    if (command === 0x90 && data2 > 0) {
+      if (this.synthSnapshot.inputArm === 'synth') {
+        this.playSynthMidiNote(data1, velocity);
+      } else {
+        this.recordTrackerMidiNote(data1, velocity);
+      }
+      return;
+    }
+
+    if (command === 0x80 || (command === 0x90 && data2 === 0)) {
+      if (this.synthSnapshot.inputArm === 'synth') {
+        this.stopSynthMidiNote(data1);
+      } else {
+        this.stopModernNotePreview();
+      }
+    }
   }
 
   private handleKeyDown(event: KeyboardEvent): void {
@@ -2098,6 +2521,19 @@ export class TrackerApplication {
 
     if (!this.engine || !this.snapshot || isEditableTarget(event.target)) {
       return;
+    }
+
+    if (featureFlags.sample_composer && this.workspaceMode === 'sample-creator' && this.synthEngine && this.synthSnapshot?.inputArm === 'synth') {
+      const note = getKeyboardNoteFromKey(event.key, this.keyboardOctave);
+      if (note) {
+        const absolute = noteToAbsolute(note);
+        if (absolute !== null && !this.synthPressedNoteKeys.has(event.code)) {
+          event.preventDefault();
+          this.synthPressedNoteKeys.set(event.code, absolute);
+          this.playSynthMidiNote(absolute, this.sampleCreatorState.velocity);
+        }
+        return;
+      }
     }
 
     if (this.snapshot.sampleEditor.open) {
@@ -2175,6 +2611,12 @@ export class TrackerApplication {
     if (this.viewMode === 'modern' && !isEditableTarget(event.target)) {
       event.stopPropagation();
       event.stopImmediatePropagation();
+      const synthMidiNote = this.synthPressedNoteKeys.get(event.code);
+      if (typeof synthMidiNote === 'number') {
+        this.synthPressedNoteKeys.delete(event.code);
+        this.stopSynthMidiNote(synthMidiNote);
+        return;
+      }
       const note = getKeyboardNoteFromKey(event.key, this.keyboardOctave);
       if (note) {
         this.modernPressedNoteKeys.delete(event.code);

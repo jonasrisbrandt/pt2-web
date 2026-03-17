@@ -1230,6 +1230,42 @@ void pt2_web_engine_update_sample(int32_t sample, const char *name, int32_t volu
 	pt2webMarkSongModified();
 }
 
+void pt2_web_engine_import_sample_buffer(int32_t slot, const char *name, int32_t volume, int32_t fineTune, int32_t loopStart, int32_t loopLength, const int8_t *data, int32_t length)
+{
+	if (song == NULL || song->sampleData == NULL)
+		return;
+
+	slot = CLAMP(slot, 0, MOD_SAMPLES - 1);
+	moduleSample_t *s = &song->samples[slot];
+
+	editor.currSample = (int8_t)slot;
+	editor.sampleZero = false;
+
+	memset(s->text, 0, sizeof (s->text));
+	if (name != NULL)
+		strncpy(s->text, name, 22);
+
+	s->volume = clampInt8(volume, 0, 64);
+	fineTune = CLAMP(fineTune, -8, 7);
+	s->fineTune = (uint8_t)((fineTune < 0) ? (16 + fineTune) : fineTune);
+	s->length = CLAMP(length, 0, config.maxSampleLength);
+	s->loopStart = MAX(0, loopStart & ~1);
+	s->loopLength = MAX(2, loopLength & ~1);
+	normalizeSampleLoop(s);
+
+	int8_t *dst = &song->sampleData[s->offset];
+	if (s->length > 0 && data != NULL)
+		memcpy(dst, data, (size_t)s->length);
+	if (s->length < config.maxSampleLength)
+		memset(&dst[s->length], 0, (size_t)(config.maxSampleLength - s->length));
+
+	fixSampleBeep(s);
+	updatePaulaLoops();
+	pt2webRefreshSelectedSample();
+	pt2webMarkSampleDataDirty(slot);
+	pt2webMarkSongModified();
+}
+
 void pt2_web_engine_open_sample_editor(int32_t sample)
 {
 	if (song == NULL)

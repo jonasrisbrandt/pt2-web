@@ -6,6 +6,7 @@ import type {
   EngineConfig,
   EngineEvent,
   ExportedFile,
+  ImportedSample,
   PatternCell,
   QuadrascopeState,
   SampleExportFormat,
@@ -190,6 +191,38 @@ export class WasmTrackerEngine implements TrackerEngine {
       mimeType: format === 'wav' ? 'audio/wav' : 'application/octet-stream',
       bytes: module.FS.readFile(path),
     };
+  }
+
+  importSample(slot: number, sample: ImportedSample): void {
+    const module = this.requireModule();
+    const length = sample.data.length;
+    const pointer = this.callNumber('malloc', ['number'], [length > 0 ? length : 1]);
+    try {
+      if (length > 0) {
+        module.HEAP8.set(sample.data, pointer);
+      } else {
+        module.HEAP8[pointer] = 0;
+      }
+
+      this.callVoid(
+        'pt2_web_engine_import_sample_buffer',
+        ['number', 'string', 'number', 'number', 'number', 'number', 'number', 'number'],
+        [
+          slot,
+          sample.name,
+          sample.volume,
+          sample.fineTune,
+          sample.loopStart,
+          sample.loopLength,
+          pointer,
+          length,
+        ],
+      );
+    } finally {
+      this.callVoid('free', ['number'], [pointer]);
+    }
+
+    this.emitSnapshot(this.getSnapshot());
   }
 
   setClassicRenderingActive(active: boolean): void {

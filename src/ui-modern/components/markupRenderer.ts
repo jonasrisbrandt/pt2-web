@@ -1,3 +1,4 @@
+import { featureFlags } from '../../config/featureFlags';
 import type { CursorField, PatternCell, SampleSlot, TrackerSnapshot } from '../../core/trackerTypes';
 import {
   escapeHtml,
@@ -262,6 +263,7 @@ export interface SelectedSamplePanelRenderOptions {
   stopIconHtml: string;
   editIconHtml: string;
   replaceIconHtml: string;
+  createIconHtml: string;
 }
 
 export const renderSelectedSamplePanel = ({
@@ -273,6 +275,7 @@ export const renderSelectedSamplePanel = ({
   stopIconHtml,
   editIconHtml,
   replaceIconHtml,
+  createIconHtml,
 }: SelectedSamplePanelRenderOptions): string => `
   <section class="sample-detail-panel">
     <div class="sample-detail-head">
@@ -283,6 +286,7 @@ export const renderSelectedSamplePanel = ({
       <div class="sample-detail-actions">
         ${renderToolIconButton(samplePreviewPlaying ? 'sample-preview-stop' : 'sample-preview-play', samplePreviewPlaying ? stopIconHtml : playIconHtml, samplePreviewPlaying ? 'Stop preview' : 'Play preview', samplePreviewPlaying, sample.length <= 0, 'sample-preview-toggle')}
         ${renderToolIconButton('sample-editor-open', editIconHtml, 'Open sample editor', false, sample.length <= 0)}
+        ${featureFlags.sample_composer ? renderToolIconButton('sample-creator-open', createIconHtml, 'Open Sample Creator', false, false) : ''}
         ${renderToolIconButton('sample-load-selected', replaceIconHtml, sample.length > 0 ? 'Replace sample' : 'Load sample', false, !editable)}
       </div>
     </div>

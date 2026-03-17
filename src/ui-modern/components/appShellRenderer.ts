@@ -1,5 +1,6 @@
 export interface AppShellRenderOptions {
   viewMode: 'modern' | 'classic';
+  workspaceMode?: 'tracker' | 'sample-creator';
   viewToggleHtml: string;
   songTitleHtml: string;
   transportControlsHtml: string;
@@ -28,6 +29,7 @@ export interface AppShellRenderOptions {
   appVersion: string;
   fileActionsDisabled: boolean;
   importDisabled: boolean;
+  sampleCreatorHtml?: string;
 }
 
 const renderMenuItem = (
@@ -49,6 +51,7 @@ const renderMenuItem = (
 
 export const renderAppShellMarkup = ({
   viewMode,
+  workspaceMode = 'tracker',
   viewToggleHtml,
   songTitleHtml,
   transportControlsHtml,
@@ -77,6 +80,7 @@ export const renderAppShellMarkup = ({
   appVersion,
   fileActionsDisabled,
   importDisabled,
+  sampleCreatorHtml = '',
 }: AppShellRenderOptions): string => `
   <section class="menubar-shell" data-menu-root>
     <div class="menubar">
@@ -115,7 +119,14 @@ export const renderAppShellMarkup = ({
     </div>
   </section>
 
-  <main class="workspace">
+  <main class="workspace workspace--${workspaceMode}">
+    ${workspaceMode === 'sample-creator'
+      ? `
+        <section class="sample-creator-shell">
+          ${sampleCreatorHtml}
+        </section>
+      `
+      : `
     <section class="tracker-stack">
       <article class="panel module-panel${moduleCollapsed ? ' is-collapsed' : ''}">
         <div class="panel-head compact panel-head--section module-head">
@@ -199,6 +210,7 @@ export const renderAppShellMarkup = ({
         </div>
       </section>
     </aside>
+      `}
   </main>
 
   <div class="modal-overlay${aboutOpen ? ' is-open' : ''}" data-role="about-modal">

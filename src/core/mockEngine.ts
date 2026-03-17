@@ -4,6 +4,7 @@ import type {
   EngineConfig,
   EngineEvent,
   ExportedFile,
+  ImportedSample,
   PatternCell,
   PatternRow,
   QuadrascopeState,
@@ -283,6 +284,30 @@ export class MockTrackerEngine implements TrackerEngine {
       mimeType: 'application/json',
       bytes: new TextEncoder().encode(JSON.stringify(sample, null, 2)),
     };
+  }
+
+  importSample(slot: number, importedSample: ImportedSample): void {
+    const sampleIndex = clamp(slot, 0, DEFAULT_SAMPLES - 1);
+    const sample = this.snapshot.samples[sampleIndex];
+    if (!sample) {
+      return;
+    }
+
+    const nextData = importedSample.data.slice(0, Math.max(0, importedSample.data.length));
+    this.sampleData[sampleIndex] = nextData;
+    sample.name = importedSample.name.slice(0, 22);
+    sample.length = nextData.length;
+    sample.volume = clamp(importedSample.volume, 0, 64);
+    sample.fineTune = clamp(importedSample.fineTune, -8, 7);
+    sample.loopStart = clamp(importedSample.loopStart & ~1, 0, Math.max(0, nextData.length - 2));
+    sample.loopLength = nextData.length <= 1
+      ? 2
+      : clamp(importedSample.loopLength & ~1, 2, Math.max(2, nextData.length - sample.loopStart));
+    sample.dataRevision += 1;
+    this.snapshot.selectedSample = sampleIndex;
+    this.syncSampleEditor(sampleIndex, true);
+    this.snapshot.status = `Imported rendered sample into slot ${sampleIndex + 1}.`;
+    this.emitSnapshot();
   }
 
   setClassicRenderingActive(_active: boolean): void {

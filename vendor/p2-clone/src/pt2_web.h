@@ -10,6 +10,7 @@ int32_t pt2_web_engine_load_module(const char *fullPath);
 const char *pt2_web_engine_save_module(const char *directory);
 int32_t pt2_web_engine_load_sample(const char *fullPath);
 const char *pt2_web_engine_save_sample(int32_t slot, const char *format, const char *directory);
+void pt2_web_engine_import_sample_buffer(int32_t slot, const char *name, int32_t volume, int32_t fineTune, int32_t loopStart, int32_t loopLength, const int8_t *data, int32_t length);
 void pt2_web_engine_set_classic_rendering_active(int32_t active);
 bool pt2_web_engine_classic_rendering_active(void);
 void pt2_web_engine_force_redraw(void);

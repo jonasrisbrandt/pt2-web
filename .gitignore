@@ -7,3 +7,4 @@ vite-dev.log
 *.temp
 *.cache
 coverage/
+public/wasm-synth/
