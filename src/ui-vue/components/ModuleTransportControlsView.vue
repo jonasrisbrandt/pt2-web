@@ -1,7 +1,7 @@
 <template>
   <ToolIconButtonView
     v-for="button in buttons"
-    :key="button.action"
+    :key="`${button.action}:${button.label}:${button.active ? '1' : '0'}:${button.valueText ?? ''}`"
     :action="button.action"
     :icon-html="button.iconHtml"
     :label="button.label"

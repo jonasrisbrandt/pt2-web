@@ -41,7 +41,6 @@ interface BuildTrackerShellViewStateOptions {
   workspaceMode: WorkspaceMode;
   keyboardOctave: number;
   visualizationMode: VisualizationMode;
-  preferredTransportMode: TransportMode;
   samplePage: number;
   samplePageCount: number;
   sampleEditorOpen: boolean;
@@ -268,7 +267,6 @@ export const buildTrackerShellViewState = ({
   workspaceMode,
   keyboardOctave,
   visualizationMode,
-  preferredTransportMode,
   samplePage,
   samplePageCount,
   sampleEditorOpen,
@@ -288,9 +286,6 @@ export const buildTrackerShellViewState = ({
   getSectionCollapseIcon,
   renderIcon,
 }: BuildTrackerShellViewStateOptions): AppShellRenderOptions => {
-  const editable = canEditSnapshot(snapshot);
-  const playbackMode = snapshot.transport.playing ? snapshot.transport.mode : preferredTransportMode;
-  const moduleGridOptions = buildTrackerModuleGridOptions(snapshot, editable, renderIcon);
   const patternEditorPanelOptions: PatternPanelRenderOptions | null = sampleEditorOpen
     ? null
     : {
@@ -299,36 +294,13 @@ export const buildTrackerShellViewState = ({
       octaveTwoActive: keyboardOctave === 2,
       collapsed: collapsedSections.editor,
       collapseIconHtml: getSectionCollapseIcon('editor'),
-      trackHeaders: buildTrackerTrackHeaderOptions(snapshot, renderIcon),
     };
-
-  const getAudioModeLabel = (nextSnapshot: TrackerSnapshot): string => {
-    if (nextSnapshot.audio.mode === 'mono') {
-      return 'Mono playback';
-    }
-    if (nextSnapshot.audio.mode === 'amiga') {
-      return 'Amiga stereo playback';
-    }
-    return 'Custom panning playback';
-  };
-
-  const getAudioModeValue = (nextSnapshot: TrackerSnapshot): 'C' | 'M' | 'A' => {
-    if (nextSnapshot.audio.mode === 'mono') {
-      return 'M';
-    }
-    if (nextSnapshot.audio.mode === 'amiga') {
-      return 'A';
-    }
-    return 'C';
-  };
 
   return {
     viewMode,
     workspaceMode,
     viewToggleOptions: buildViewToggleOptions(viewMode, renderIcon),
     songTitle,
-    moduleTransportOptions: buildTrackerModuleTransportOptions(snapshot, playbackMode, getAudioModeLabel, getAudioModeValue, renderIcon),
-    moduleGridOptions,
     moduleCollapsed: collapsedSections.module,
     moduleCollapseIconHtml: getSectionCollapseIcon('module'),
     visualizationLabel: getVisualizationLabel(visualizationMode),

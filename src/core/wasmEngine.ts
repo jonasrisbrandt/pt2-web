@@ -425,7 +425,7 @@ export class WasmTrackerEngine implements TrackerEngine {
         break;
     }
 
-    this.emitSnapshotForTransportCommand();
+    this.emitSnapshot(this.getSnapshot());
   }
 
   refreshLayout(): void {
@@ -694,16 +694,6 @@ export class WasmTrackerEngine implements TrackerEngine {
         this.emitSnapshot(nextSnapshot);
         return;
       }
-    }
-
-    this.emitSnapshot(this.getSnapshot());
-  }
-
-  private emitSnapshotForTransportCommand(): void {
-    const nextSnapshot = this.applyLiveStateToSnapshot(this.getLiveState());
-    if (nextSnapshot) {
-      this.emitSnapshot(nextSnapshot);
-      return;
     }
 
     this.emitSnapshot(this.getSnapshot());

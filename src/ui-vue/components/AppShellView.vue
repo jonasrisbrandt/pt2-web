@@ -111,13 +111,19 @@
             </div>
             <div class="panel-head-actions">
               <div class="module-transport-controls">
-                <ModuleTransportControlsView :buttons="moduleTransportOptions" />
+                <div
+                  style="display: contents"
+                  data-role="module-transport-host"
+                />
               </div>
             </div>
           </div>
           <div class="panel-body">
             <div class="module-grid">
-              <ModuleGridView :cards="moduleGridOptions.cards" />
+              <div
+                style="display: contents"
+                data-role="module-grid-host"
+              />
             </div>
           </div>
         </article>
@@ -271,8 +277,6 @@ import ClassicDebugView from './ClassicDebugView.vue';
 import IconButtonGroupView from './IconButtonGroupView.vue';
 import InlineNameFieldView from './InlineNameFieldView.vue';
 import MenuItemButton from './MenuItemButton.vue';
-import ModuleGridView from './ModuleGridView.vue';
-import ModuleTransportControlsView from './ModuleTransportControlsView.vue';
 import PatternEditorPanelView from './PatternEditorPanelView.vue';
 import SampleBankView from './SampleBankView.vue';
 import SampleCreatorView from './SampleCreatorView.vue';

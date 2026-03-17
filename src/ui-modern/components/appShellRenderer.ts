@@ -88,8 +88,6 @@ export interface AppShellRenderOptions {
   workspaceMode?: 'tracker' | 'sample-creator';
   viewToggleOptions: ToolbarButtonRenderOptions[];
   songTitle: InlineNameFieldRenderOptions;
-  moduleTransportOptions: ToolIconButtonRenderOptions[];
-  moduleGridOptions: ModuleGridRenderOptions;
   moduleCollapsed: boolean;
   moduleCollapseIconHtml: string;
   visualizationLabel: string;
@@ -119,7 +117,6 @@ export interface PatternPanelRenderOptions {
   octaveTwoActive: boolean;
   collapsed: boolean;
   collapseIconHtml: string;
-  trackHeaders: TrackHeaderRenderOptions[];
 }
 
 export const renderPatternEditorPanel = ({
@@ -128,7 +125,6 @@ export const renderPatternEditorPanel = ({
   octaveTwoActive,
   collapsed,
   collapseIconHtml,
-  trackHeaders,
 }: PatternPanelRenderOptions): string => `
   <article class="panel pattern-panel editor-panel-shell${collapsed ? ' is-collapsed' : ''}">
     <div class="panel-head compact panel-head--section">
@@ -152,20 +148,7 @@ export const renderPatternEditorPanel = ({
     <div class="panel-body">
       <div class="pattern-header">
         <span>Row</span>
-        ${trackHeaders.map(({ channel, muted, muteIconHtml }) => `
-          <span class="track-label track-label--${channel + 1}${muted ? ' is-muted' : ''}">
-            <button
-              type="button"
-              class="track-mute-button${muted ? ' is-muted' : ''}"
-              data-role="track-mute-${channel}"
-              data-action="toggle-track-mute"
-              data-channel="${channel}"
-              aria-pressed="${muted ? 'true' : 'false'}"
-              aria-label="${muted ? 'Unmute track' : 'Mute track'} ${channel + 1}"
-            >${muteIconHtml}</button>
-            <span>Track ${channel + 1}</span>
-          </span>
-        `).join('')}
+        <div style="display: contents" data-role="pattern-track-headers-host"></div>
       </div>
       <div class="pattern-canvas-host" data-role="pattern-host"></div>
     </div>

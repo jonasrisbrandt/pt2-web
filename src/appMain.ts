@@ -1,4 +1,4 @@
-import { createElement, ArrowLeft, ArrowLeftRight, ArrowUpDown, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Crop, FileUp, Focus, Monitor, Pause, PencilLine, Piano, Play, Repeat, Scissors, SlidersHorizontal, Square, View, Volume2, VolumeX } from 'lucide';
+import { createElement, ArrowLeft, ArrowUpDown, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Crop, FileUp, Focus, Monitor, PencilLine, Piano, Repeat, Scissors, SlidersHorizontal, View } from 'lucide';
 import { featureFlags } from './config/featureFlags';
 import { translateClassicKeyboardEvent, type ClassicKeyTranslation } from './core/classicKeyboard';
 import { getKeyboardNoteFromKey, interpretKeyboard, isEditableTarget } from './core/keyboard';
@@ -76,16 +76,22 @@ import {
 } from './ui-modern/components/markupRenderer';
 import type { InlineNameFieldRenderOptions } from './ui-modern/components/viewModels';
 import {
-  buildTrackerModuleTransportOptions,
-  buildTrackerShellLiveLabels,
   buildTrackerShellViewState,
 } from './ui-vue/controllers/trackerShellViewController';
+import {
+  buildTrackerModuleGridHudOptions,
+  buildTrackerModuleTransportHudOptions,
+  buildTrackerTrackHeadersHudOptions,
+} from './ui-vue/controllers/trackerPlaybackHudController';
 import {
   buildTrackerSampleBankOptions,
   buildTrackerSampleEditorPanelOptions,
   buildTrackerSelectedSamplePanelOptions,
 } from './ui-vue/controllers/trackerSampleViewController';
 import { renderAppShellView } from './ui-vue/renderers/renderAppShellView';
+import { renderModuleGridView } from './ui-vue/renderers/renderModuleGridView';
+import { renderModuleTransportControlsView } from './ui-vue/renderers/renderModuleTransportControlsView';
+import { renderPatternTrackHeadersView } from './ui-vue/renderers/renderPatternTrackHeadersView';
 import {
   drawPatternCanvas as drawModernPatternCanvas,
   getPatternCanvasLayout as getModernPatternCanvasLayout,
@@ -107,6 +113,7 @@ import {
   triggerPianoGlow as triggerModernPianoGlow,
 } from './ui-modern/components/visualizationRenderer';
 import { createTrackerAppDom } from './ui-modern/session/appDom';
+import { uiPerfMonitor } from './perf/uiPerfMonitor';
 import { TrackerSignalTrailsFrameSource, TrackerSpectrumFrameSource } from './visualization-adapters/trackerVisualizationAdapter';
 import { VisualizationEngine } from './visualization-engine/engine';
 import { TrackerRuntime } from './trackerRuntime';
@@ -126,6 +133,8 @@ const PIANO_HEIGHT = QUADRASCOPE_HEIGHT;
 const SAMPLE_PREVIEW_HEIGHT = 182;
 const SAMPLE_EDITOR_HEIGHT = 352;
 const SAMPLE_PREVIEW_RATE = 8287;
+const PLAYBACK_FRAME_INTERVAL_MS = 1000 / 60;
+const VISUALIZATION_FRAME_INTERVAL_MS = 1000 / 60;
 
 type SectionKey = 'module' | 'visualization' | 'editor' | 'samples';
 type MenuKey = 'file' | 'help';
@@ -166,35 +175,38 @@ type ModernRedrawReason = 'full' | 'layout-change' | 'transport' | 'sample-previ
 interface ModernMountRefs {
   appShell: HTMLElement | null;
   patternHost: HTMLElement | null;
+  patternTrackHeadersHost: HTMLElement | null;
   visualizationHost: HTMLElement | null;
   samplePreviewHost: HTMLElement | null;
   sampleEditorHost: HTMLElement | null;
-  metricPosition: HTMLElement | null;
-  metricPattern: HTMLElement | null;
-  metricLength: HTMLElement | null;
-  metricBpm: HTMLElement | null;
-  metricTime: HTMLElement | null;
-  metricSize: HTMLElement | null;
-  octaveValue: HTMLElement | null;
-  visualizationLabel: HTMLElement | null;
-  transportToggle: HTMLButtonElement | null;
-  transportMode: HTMLButtonElement | null;
-  transportModeValue: HTMLElement | null;
-  audioMode: HTMLButtonElement | null;
-  songStepperButtons: HTMLButtonElement[];
-  trackMuteButtons: Array<HTMLButtonElement | null>;
-  trackMuteLabels: Array<HTMLElement | null>;
+  moduleTransportHost: HTMLElement | null;
+  moduleGridHost: HTMLElement | null;
   sampleEditorScroll: HTMLInputElement | null;
 }
 
-const iconMarkup = (iconNode: unknown): string =>
-  createElement(iconNode as Parameters<typeof createElement>[0], {
-    class: 'ui-icon',
-    width: 14,
-    height: 14,
-    'stroke-width': 1.8,
-    'aria-hidden': 'true',
-  }).outerHTML;
+const iconMarkupCache = new Map<unknown, string>();
+
+const iconMarkup = (iconNode: unknown): string => {
+  const cached = iconMarkupCache.get(iconNode);
+  if (cached) {
+    return cached;
+  }
+
+  const stop = uiPerfMonitor.begin('ui.iconMarkup.uncached');
+  try {
+    const markup = createElement(iconNode as Parameters<typeof createElement>[0], {
+      class: 'ui-icon',
+      width: 14,
+      height: 14,
+      'stroke-width': 1.8,
+      'aria-hidden': 'true',
+    }).outerHTML;
+    iconMarkupCache.set(iconNode, markup);
+    return markup;
+  } finally {
+    stop();
+  }
+};
 
 export class TrackerApplication {
   private readonly root: HTMLElement;
@@ -230,10 +242,15 @@ export class TrackerApplication {
   private shellHost: HTMLElement | null = null;
   private layoutRefreshFrame: number | null = null;
   private playbackFrame: number | null = null;
+  private playbackDelayTimer: number | null = null;
   private playbackTickActive = false;
   private lastPlaybackCoordinatorAt: number | null = null;
+  private lastVisualizationFrameAt: number | null = null;
   private lastLiveStateVersion = -1;
   private lastAppliedLiveStateVersion = -1;
+  private lastModuleTransportHudKey = '';
+  private lastModuleGridHudKey = '';
+  private lastPatternTrackHeadersHudKey = '';
   private mountedVisualizationMode: VisualizationMode | null = null;
   private domRefs: ModernMountRefs | null = null;
   private samplePreviewCache = new Map<number, SampleCacheEntry>();
@@ -320,7 +337,14 @@ export class TrackerApplication {
           return;
         }
 
-        if (this.viewMode === 'modern' && this.domRefs?.appShell && snapshot.transport.playing) {
+        if (this.viewMode === 'modern' && this.domRefs?.appShell && (previousPlaying || snapshot.transport.playing)) {
+          if (previousPlaying !== snapshot.transport.playing) {
+            this.lastLiveStateVersion = -1;
+            this.lastAppliedLiveStateVersion = -1;
+            this.render();
+            return;
+          }
+
           this.syncModernPlaybackUi(snapshot, 'transport');
           return;
         }
@@ -458,106 +482,113 @@ export class TrackerApplication {
   }
 
   private render(): void {
+    const stop = uiPerfMonitor.begin('ui.render.cold');
     const snapshot = this.snapshot;
     if (!snapshot) {
+      stop();
       return;
     }
 
-    this.syncSamplePreviewSession(snapshot);
-    const selectedSample = snapshot.samples[snapshot.selectedSample];
-    const samplePage = this.resolveSamplePage(snapshot);
-    const sampleBankOptions = this.getSampleBankOptions(snapshot, samplePage);
-    const workspaceMode = featureFlags.sample_composer ? this.workspaceMode : 'tracker';
-    const sampleEditorOpen = snapshot.sampleEditor.open;
-    if (!sampleEditorOpen) {
-      this.openSampleEditorPopover = null;
-      this.sampleEditorNumberEdit = null;
-    }
-    const shell = this.ensureShellHost();
-    shell.className = `app-shell app-shell--${this.viewMode}`;
-    document.body.dataset.viewMode = this.viewMode;
-    const sampleEditorPanelOptions = sampleEditorOpen
-      ? this.getSampleEditorPanelOptions(snapshot)
-      : null;
-    const selectedSamplePanelOptions = this.getSelectedSamplePanelOptions(selectedSample, snapshot);
-
-    renderAppShellView(shell, buildTrackerShellViewState({
-      viewMode: this.viewMode,
-      workspaceMode,
-      snapshot,
-      keyboardOctave: this.keyboardOctave,
-      visualizationMode: this.visualizationMode,
-      preferredTransportMode: this.preferredTransportMode,
-      samplePage,
-      samplePageCount: this.getSamplePageCount(snapshot),
-      sampleEditorOpen,
-      collapsedSections: this.collapsedSections,
-      openMenu: this.openMenu,
-      aboutOpen: this.aboutOpen,
-      songTitle: this.getSongTitleOptions(snapshot),
-      sampleEditorPanelOptions,
-      sampleBankOptions,
-      selectedSamplePanelOptions,
-      classicDebugOptions: this.getClassicDebugOptions(),
-      appVersion: __APP_VERSION__,
-      fileActionsDisabled: snapshot.transport.playing,
-      importDisabled: !this.canEditSnapshot(snapshot),
-      sampleCreatorOptions: workspaceMode === 'sample-creator' ? this.getSampleCreatorOptions(snapshot) : null,
-      canEditSnapshot: (nextSnapshot) => this.canEditSnapshot(nextSnapshot),
-      getSectionCollapseIcon: (section) => this.getSectionCollapseIcon(section),
-      renderIcon: (iconNode) => iconMarkup(iconNode),
-    }));
-
-    this.syncModernMountRefs(shell);
-
-    const canvasHost = shell.querySelector<HTMLElement>('.engine-canvas-host');
-    if (canvasHost) {
-      this.config.canvas.className = this.viewMode === 'classic'
-        ? 'engine-canvas engine-canvas-classic'
-        : 'engine-canvas';
-      if (this.config.canvas.parentElement !== canvasHost) {
-        canvasHost.replaceChildren(this.config.canvas);
-        this.scheduleLayoutRefresh();
+    try {
+      this.syncSamplePreviewSession(snapshot);
+      const selectedSample = snapshot.samples[snapshot.selectedSample];
+      const samplePage = this.resolveSamplePage(snapshot);
+      const sampleBankOptions = this.getSampleBankOptions(snapshot, samplePage);
+      const workspaceMode = featureFlags.sample_composer ? this.workspaceMode : 'tracker';
+      const sampleEditorOpen = snapshot.sampleEditor.open;
+      if (!sampleEditorOpen) {
+        this.openSampleEditorPopover = null;
+        this.sampleEditorNumberEdit = null;
       }
-      if (this.viewMode === 'classic') {
-        window.requestAnimationFrame(() => this.config.canvas.focus());
+      const shell = this.ensureShellHost();
+      shell.className = `app-shell app-shell--${this.viewMode}`;
+      document.body.dataset.viewMode = this.viewMode;
+      const sampleEditorPanelOptions = sampleEditorOpen
+        ? this.getSampleEditorPanelOptions(snapshot)
+        : null;
+      const selectedSamplePanelOptions = this.getSelectedSamplePanelOptions(selectedSample, snapshot);
+
+      const shellState = uiPerfMonitor.measure('ui.render.cold.buildState', () => buildTrackerShellViewState({
+        viewMode: this.viewMode,
+        workspaceMode,
+        snapshot,
+        keyboardOctave: this.keyboardOctave,
+        visualizationMode: this.visualizationMode,
+        samplePage,
+        samplePageCount: this.getSamplePageCount(snapshot),
+        sampleEditorOpen,
+        collapsedSections: this.collapsedSections,
+        openMenu: this.openMenu,
+        aboutOpen: this.aboutOpen,
+        songTitle: this.getSongTitleOptions(snapshot),
+        sampleEditorPanelOptions,
+        sampleBankOptions,
+        selectedSamplePanelOptions,
+        classicDebugOptions: this.getClassicDebugOptions(),
+        appVersion: __APP_VERSION__,
+        fileActionsDisabled: snapshot.transport.playing,
+        importDisabled: !this.canEditSnapshot(snapshot),
+        sampleCreatorOptions: workspaceMode === 'sample-creator' ? this.getSampleCreatorOptions(snapshot) : null,
+        canEditSnapshot: (nextSnapshot) => this.canEditSnapshot(nextSnapshot),
+        getSectionCollapseIcon: (section) => this.getSectionCollapseIcon(section),
+        renderIcon: (iconNode) => iconMarkup(iconNode),
+      }));
+      uiPerfMonitor.measure('ui.render.cold.vue', () => renderAppShellView(shell, shellState));
+
+      this.syncModernMountRefs(shell);
+      this.renderPlaybackHud(snapshot, true);
+
+      const canvasHost = shell.querySelector<HTMLElement>('.engine-canvas-host');
+      if (canvasHost) {
+        this.config.canvas.className = this.viewMode === 'classic'
+          ? 'engine-canvas engine-canvas-classic'
+          : 'engine-canvas';
+        if (this.config.canvas.parentElement !== canvasHost) {
+          canvasHost.replaceChildren(this.config.canvas);
+          this.scheduleLayoutRefresh();
+        }
+        if (this.viewMode === 'classic') {
+          window.requestAnimationFrame(() => this.config.canvas.focus());
+        }
       }
-    }
 
-    const patternHost = this.domRefs?.patternHost ?? null;
-    if (patternHost) {
-      if (this.patternCanvas.parentElement !== patternHost) {
-        patternHost.replaceChildren(this.patternCanvas);
+      const patternHost = this.domRefs?.patternHost ?? null;
+      if (patternHost) {
+        if (this.patternCanvas.parentElement !== patternHost) {
+          patternHost.replaceChildren(this.patternCanvas);
+        }
+        this.drawPatternCanvas(snapshot);
       }
-      this.drawPatternCanvas(snapshot);
-    }
 
-    const samplePreviewHost = this.domRefs?.samplePreviewHost ?? null;
-    this.mountVisualization(snapshot);
+      const samplePreviewHost = this.domRefs?.samplePreviewHost ?? null;
+      this.mountVisualization(snapshot);
 
-    if (samplePreviewHost) {
-      if (this.samplePreviewCanvas.parentElement !== samplePreviewHost) {
-        samplePreviewHost.replaceChildren(this.samplePreviewCanvas);
+      if (samplePreviewHost) {
+        if (this.samplePreviewCanvas.parentElement !== samplePreviewHost) {
+          samplePreviewHost.replaceChildren(this.samplePreviewCanvas);
+        }
+        this.drawSelectedSamplePreview(snapshot);
       }
-      this.drawSelectedSamplePreview(snapshot);
-    }
 
-    const sampleEditorHost = this.domRefs?.sampleEditorHost ?? null;
-    if (sampleEditorHost) {
-      if (this.sampleEditorCanvas.parentElement !== sampleEditorHost) {
-        sampleEditorHost.replaceChildren(this.sampleEditorCanvas);
+      const sampleEditorHost = this.domRefs?.sampleEditorHost ?? null;
+      if (sampleEditorHost) {
+        if (this.sampleEditorCanvas.parentElement !== sampleEditorHost) {
+          sampleEditorHost.replaceChildren(this.sampleEditorCanvas);
+        }
+        this.drawSampleEditor(snapshot);
+        const view = this.getSampleEditorView(snapshot);
+        this.updateSampleEditorScrollbarThumb(snapshot.sampleEditor.sampleLength, view.length);
       }
-      this.drawSampleEditor(snapshot);
-      const view = this.getSampleEditorView(snapshot);
-      this.updateSampleEditorScrollbarThumb(snapshot.sampleEditor.sampleLength, view.length);
-    }
 
-    this.syncRenameFocus(shell);
-    this.syncSampleNumberFocus(shell);
-    this.updateClassicDebugPanel(snapshot);
-    this.lastAppliedLiveStateVersion = -1;
-    this.syncClassicRenderingState();
-    this.syncPlaybackCoordinator();
+      this.syncRenameFocus(shell);
+      this.syncSampleNumberFocus(shell);
+      this.updateClassicDebugPanel(snapshot);
+      this.lastAppliedLiveStateVersion = -1;
+      this.syncClassicRenderingState();
+      this.syncPlaybackCoordinator();
+    } finally {
+      stop();
+    }
   }
 
   private ensureShellHost(): HTMLElement {
@@ -572,54 +603,20 @@ export class TrackerApplication {
   }
 
   private syncModernMountRefs(shell: HTMLElement): void {
-    const selectActionButton = (action: string): HTMLButtonElement | null =>
-      shell.querySelector<HTMLButtonElement>(`[data-action="${action}"]`);
     const selectRole = <T extends HTMLElement>(role: string): T | null =>
       shell.querySelector<T>(`[data-role="${role}"]`);
-    const trackMuteButtons = Array.from({ length: 4 }, (_, channel) =>
-      selectRole<HTMLButtonElement>(`track-mute-${channel}`));
 
     this.domRefs = {
       appShell: shell,
       patternHost: selectRole<HTMLElement>('pattern-host'),
+      patternTrackHeadersHost: selectRole<HTMLElement>('pattern-track-headers-host'),
       visualizationHost: selectRole<HTMLElement>('visualization-host'),
       samplePreviewHost: shell.querySelector<HTMLElement>('[data-role="sample-preview-host"]'),
       sampleEditorHost: shell.querySelector<HTMLElement>('[data-role="sample-editor-host"]'),
-      metricPosition: selectRole<HTMLElement>('metric-position'),
-      metricPattern: selectRole<HTMLElement>('metric-pattern'),
-      metricLength: selectRole<HTMLElement>('metric-length'),
-      metricBpm: selectRole<HTMLElement>('metric-bpm'),
-      metricTime: selectRole<HTMLElement>('metric-time'),
-      metricSize: selectRole<HTMLElement>('metric-size'),
-      octaveValue: selectRole<HTMLElement>('octave-value'),
-      visualizationLabel: selectRole<HTMLElement>('visualization-label'),
-      transportToggle: selectRole<HTMLButtonElement>('module-transport-toggle'),
-      transportMode: selectRole<HTMLButtonElement>('module-transport-mode'),
-      transportModeValue: shell.querySelector<HTMLElement>('[data-role="module-transport-mode"] .tool-icon-button__value'),
-      audioMode: selectRole<HTMLButtonElement>('module-audio-mode'),
-      songStepperButtons: [
-        'song-position-down',
-        'song-position-up',
-        'song-pattern-down',
-        'song-pattern-up',
-        'song-length-down',
-        'song-length-up',
-        'song-bpm-down',
-        'song-bpm-up',
-      ].flatMap((action) => {
-        const button = selectActionButton(action);
-        return button ? [button] : [];
-      }),
-      trackMuteButtons,
-      trackMuteLabels: trackMuteButtons.map((button) => button?.closest('.track-label') as HTMLElement | null),
+      moduleTransportHost: selectRole<HTMLElement>('module-transport-host'),
+      moduleGridHost: selectRole<HTMLElement>('module-grid-host'),
       sampleEditorScroll: shell.querySelector<HTMLInputElement>('[data-input="sample-editor-scroll"]'),
     };
-  }
-
-  private setElementText(element: HTMLElement | null, value: string): void {
-    if (element && element.textContent !== value) {
-      element.textContent = value;
-    }
   }
 
   private canEditSnapshot(snapshot: TrackerSnapshot | null): boolean {
@@ -1011,29 +1008,36 @@ export class TrackerApplication {
     this.drawVisualization(snapshot);
   }
 
-  private drawVisualization(snapshot: TrackerSnapshot): void {
+  private drawVisualization(snapshot: TrackerSnapshot, drawnAt = performance.now()): void {
+    const stop = uiPerfMonitor.begin('ui.draw.visualization.total');
+    uiPerfMonitor.setTag('viz', this.visualizationMode);
     const quadrascope = this.quadrascope ?? snapshot.quadrascope ?? null;
-    switch (this.visualizationMode) {
-      case 'quad-stack':
-        this.drawQuadrascopeStack(quadrascope);
-        break;
-      case 'quad-classic':
-        this.drawQuadrascopeClassic(quadrascope);
-        break;
-      case 'spectrum':
-        this.drawSpectrumAnalyzer(quadrascope);
-        break;
-      case 'split':
-        this.drawQuadrascopeStack(quadrascope);
-        this.drawSpectrumAnalyzer(quadrascope);
-        break;
-      case 'signal-trails':
-        this.drawSignalTrails(quadrascope);
-        break;
-      case 'piano':
-        this.syncPianoNotes(snapshot, quadrascope);
-        this.drawPianoVisualizer(snapshot, quadrascope);
-        break;
+    try {
+      switch (this.visualizationMode) {
+        case 'quad-stack':
+          this.drawQuadrascopeStack(quadrascope);
+          break;
+        case 'quad-classic':
+          this.drawQuadrascopeClassic(quadrascope);
+          break;
+        case 'spectrum':
+          this.drawSpectrumAnalyzer(quadrascope);
+          break;
+        case 'split':
+          this.drawQuadrascopeStack(quadrascope);
+          this.drawSpectrumAnalyzer(quadrascope);
+          break;
+        case 'signal-trails':
+          this.drawSignalTrails(quadrascope);
+          break;
+        case 'piano':
+          this.syncPianoNotes(snapshot, quadrascope);
+          this.drawPianoVisualizer(snapshot, quadrascope);
+          break;
+      }
+      this.lastVisualizationFrameAt = drawnAt;
+    } finally {
+      stop();
     }
   }
 
@@ -1042,6 +1046,7 @@ export class TrackerApplication {
     if (this.snapshot) {
       this.snapshot.quadrascope = undefined;
     }
+    this.lastVisualizationFrameAt = null;
     this.lastPianoTransportKey = null;
     this.pianoLastFrameAt = null;
 
@@ -1076,9 +1081,14 @@ export class TrackerApplication {
       window.cancelAnimationFrame(this.playbackFrame);
       this.playbackFrame = null;
     }
+    if (this.playbackDelayTimer !== null) {
+      window.clearTimeout(this.playbackDelayTimer);
+      this.playbackDelayTimer = null;
+    }
 
     this.playbackTickActive = false;
     this.lastPlaybackCoordinatorAt = null;
+    this.lastVisualizationFrameAt = null;
   }
 
   private syncPlaybackCoordinator(): void {
@@ -1130,86 +1140,93 @@ export class TrackerApplication {
       return;
     }
 
+    const stop = uiPerfMonitor.begin('ui.syncModernPlaybackUi');
+    try {
+      this.renderPlaybackHud(snapshot);
+      this.redrawModernCanvases(snapshot, reason);
+    } finally {
+      stop();
+    }
+  }
+
+  private renderPlaybackHud(snapshot: TrackerSnapshot, force = false): void {
     const refs = this.domRefs;
-    const liveLabels = buildTrackerShellLiveLabels(snapshot, this.keyboardOctave, this.visualizationMode);
-    this.setElementText(refs.metricPosition, liveLabels.position);
-    this.setElementText(refs.metricPattern, liveLabels.pattern);
-    this.setElementText(refs.metricLength, liveLabels.length);
-    this.setElementText(refs.metricBpm, liveLabels.bpm);
-    this.setElementText(refs.metricTime, liveLabels.time);
-    this.setElementText(refs.metricSize, liveLabels.size);
-    this.setElementText(refs.octaveValue, liveLabels.octave);
-    this.setElementText(refs.visualizationLabel, liveLabels.visualization);
-
-    const playbackMode = snapshot.transport.playing ? snapshot.transport.mode : this.preferredTransportMode;
-    const moduleTransportOptions = buildTrackerModuleTransportOptions(
-      snapshot,
-      playbackMode,
-      (nextSnapshot) => this.getAudioModeLabel(nextSnapshot),
-      (nextSnapshot) => this.getAudioModeValue(nextSnapshot),
-      (iconNode) => iconMarkup(iconNode),
-    );
-    const transportModeOption = moduleTransportOptions.find((option) => option.role === 'module-transport-mode') ?? null;
-    const transportToggleOption = moduleTransportOptions.find((option) => option.role === 'module-transport-toggle') ?? null;
-    const audioModeOption = moduleTransportOptions.find((option) => option.role === 'module-audio-mode') ?? null;
-
-    if (refs.transportToggle && transportToggleOption) {
-      const label = transportToggleOption.label;
-      refs.transportToggle.disabled = transportToggleOption.disabled;
-      refs.transportToggle.classList.toggle('is-active', transportToggleOption.active);
-      refs.transportToggle.dataset.action = transportToggleOption.action;
-      const nextToggleState = `${snapshot.transport.playing}:${playbackMode}`;
-      if (refs.transportToggle.dataset.toggleState !== nextToggleState) {
-        refs.transportToggle.dataset.toggleState = nextToggleState;
-        refs.transportToggle.innerHTML = `${transportToggleOption.iconHtml}<span class="sr-only">${label}</span>`;
-      }
+    if (!refs) {
+      return;
     }
 
-    if (refs.transportMode && transportModeOption) {
-      refs.transportMode.classList.toggle('is-active', transportModeOption.active);
-      if (refs.transportModeValue) {
-        refs.transportModeValue.textContent = transportModeOption.valueText ?? '';
-      }
-    }
+    const stop = uiPerfMonitor.begin('ui.hud.total');
+    try {
+      const editable = this.canEditSnapshot(snapshot);
+      const buildOptions = () => ({
+        snapshot,
+        preferredTransportMode: this.preferredTransportMode,
+        canEditSnapshot: (_snapshot: TrackerSnapshot) => editable,
+        getAudioModeLabel: (nextSnapshot: TrackerSnapshot) => this.getAudioModeLabel(nextSnapshot),
+        getAudioModeValue: (nextSnapshot: TrackerSnapshot) => this.getAudioModeValue(nextSnapshot),
+        renderIcon: (iconNode: unknown) => iconMarkup(iconNode),
+      });
 
-    if (refs.audioMode && audioModeOption) {
-      const label = audioModeOption.label;
-      refs.audioMode.classList.toggle('is-active', audioModeOption.active);
-      const nextAudioState = snapshot.audio.mode;
-      if (refs.audioMode.dataset.audioState !== nextAudioState) {
-        refs.audioMode.dataset.audioState = nextAudioState;
-        refs.audioMode.innerHTML = `${audioModeOption.iconHtml}<span class="tool-icon-button__value" aria-hidden="true">${audioModeOption.valueText ?? ''}</span><span class="sr-only">${label}</span>`;
-      }
-    }
-
-    const canEdit = this.canEditSnapshot(snapshot);
-    for (const button of refs.songStepperButtons) {
-      button.disabled = !canEdit;
-    }
-
-    for (let channel = 0; channel < 4; channel += 1) {
-      const muted = snapshot.editor.muted[channel] ?? false;
-      const button = refs.trackMuteButtons[channel] ?? null;
-      if (button) {
-        button.classList.toggle('is-muted', muted);
-        button.setAttribute('aria-pressed', muted ? 'true' : 'false');
-        if (button.dataset.mutedState !== String(muted)) {
-          button.dataset.mutedState = String(muted);
-          button.innerHTML = iconMarkup(muted ? VolumeX : Volume2);
+      const playbackMode = snapshot.transport.playing ? snapshot.transport.mode : this.preferredTransportMode;
+      const moduleTransportHudKey = [
+        snapshot.transport.playing ? '1' : '0',
+        playbackMode,
+        snapshot.audio.mode,
+      ].join('|');
+      const moduleGridHudKey = [
+        snapshot.transport.position,
+        snapshot.pattern.index,
+        snapshot.song.length,
+        snapshot.transport.bpm,
+        snapshot.transport.elapsedSeconds,
+        snapshot.song.sizeBytes,
+        editable ? '1' : '0',
+      ].join('|');
+      let mutedMask = 0;
+      for (let channel = 0; channel < 4; channel += 1) {
+        if (snapshot.editor.muted[channel]) {
+          mutedMask |= 1 << channel;
         }
       }
-      refs.trackMuteLabels[channel]?.classList.toggle('is-muted', muted);
-    }
+      const patternTrackHeadersHudKey = String(mutedMask);
 
-    this.redrawModernCanvases(snapshot, reason);
+      if (refs.moduleTransportHost && (force || moduleTransportHudKey !== this.lastModuleTransportHudKey)) {
+        const moduleTransportOptions = uiPerfMonitor.measure('ui.hud.transport.build', () =>
+          buildTrackerModuleTransportHudOptions(buildOptions()));
+        uiPerfMonitor.measure('ui.hud.transport.render', () =>
+          renderModuleTransportControlsView(refs.moduleTransportHost!, moduleTransportOptions));
+        this.lastModuleTransportHudKey = moduleTransportHudKey;
+      }
+
+      if (refs.moduleGridHost && (force || moduleGridHudKey !== this.lastModuleGridHudKey)) {
+        const moduleGridOptions = uiPerfMonitor.measure('ui.hud.grid.build', () =>
+          buildTrackerModuleGridHudOptions(buildOptions()));
+        uiPerfMonitor.measure('ui.hud.grid.render', () =>
+          renderModuleGridView(refs.moduleGridHost!, moduleGridOptions.cards));
+        this.lastModuleGridHudKey = moduleGridHudKey;
+      }
+
+      if (refs.patternTrackHeadersHost && (force || patternTrackHeadersHudKey !== this.lastPatternTrackHeadersHudKey)) {
+        const trackHeaders = uiPerfMonitor.measure('ui.hud.headers.build', () =>
+          buildTrackerTrackHeadersHudOptions(buildOptions()));
+        uiPerfMonitor.measure('ui.hud.headers.render', () =>
+          renderPatternTrackHeadersView(refs.patternTrackHeadersHost!, trackHeaders));
+        this.lastPatternTrackHeadersHudKey = patternTrackHeadersHudKey;
+      }
+    } finally {
+      stop();
+    }
   }
 
   private applyLiveState(liveState: TrackerLiveState): boolean {
+    const stop = uiPerfMonitor.begin('ui.applyLiveState');
     if (!this.snapshot) {
+      stop();
       return false;
     }
 
     if (this.lastAppliedLiveStateVersion === liveState.version) {
+      stop();
       return false;
     }
 
@@ -1238,6 +1255,7 @@ export class TrackerApplication {
       this.resetVisualizationState(true);
     }
 
+    stop();
     return true;
   }
 
@@ -1337,14 +1355,19 @@ export class TrackerApplication {
       return;
     }
 
-    drawModernSelectedSamplePreview({
-      canvas: this.samplePreviewCanvas,
-      snapshot,
-      height: SAMPLE_PREVIEW_HEIGHT,
-      previewPlayheadOffset: this.getSamplePreviewPlayheadOffset(),
-      getWaveformSource: (sample) => this.getWaveformSource(sample),
-      drawRoundedRect: (ctx, x, y, width, height, radius) => this.drawRoundedRect(ctx, x, y, width, height, radius),
-    });
+    const stop = uiPerfMonitor.begin('ui.draw.samplePreview');
+    try {
+      drawModernSelectedSamplePreview({
+        canvas: this.samplePreviewCanvas,
+        snapshot,
+        height: SAMPLE_PREVIEW_HEIGHT,
+        previewPlayheadOffset: this.getSamplePreviewPlayheadOffset(),
+        getWaveformSource: (sample) => this.getWaveformSource(sample),
+        drawRoundedRect: (ctx, x, y, width, height, radius) => this.drawRoundedRect(ctx, x, y, width, height, radius),
+      });
+    } finally {
+      stop();
+    }
   }
 
   private drawSampleEditor(snapshot: TrackerSnapshot): void {
@@ -1352,17 +1375,22 @@ export class TrackerApplication {
       return;
     }
 
-    drawModernSampleEditor({
-      canvas: this.sampleEditorCanvas,
-      snapshot,
-      height: SAMPLE_EDITOR_HEIGHT,
-      previewPlayheadOffset: this.getSamplePreviewPlayheadOffset(),
-      getWaveformSource: (sample) => this.getWaveformSource(sample),
-      getSampleEditorView: (nextSnapshot) => this.getSampleEditorView(nextSnapshot),
-      getDraftSampleSelection: (nextSnapshot) => this.getDraftSampleSelection(nextSnapshot),
-      getDraftSampleLoop: (nextSnapshot) => this.getDraftSampleLoop(nextSnapshot),
-      drawRoundedRect: (ctx, x, y, width, height, radius) => this.drawRoundedRect(ctx, x, y, width, height, radius),
-    });
+    const stop = uiPerfMonitor.begin('ui.draw.sampleEditor');
+    try {
+      drawModernSampleEditor({
+        canvas: this.sampleEditorCanvas,
+        snapshot,
+        height: SAMPLE_EDITOR_HEIGHT,
+        previewPlayheadOffset: this.getSamplePreviewPlayheadOffset(),
+        getWaveformSource: (sample) => this.getWaveformSource(sample),
+        getSampleEditorView: (nextSnapshot) => this.getSampleEditorView(nextSnapshot),
+        getDraftSampleSelection: (nextSnapshot) => this.getDraftSampleSelection(nextSnapshot),
+        getDraftSampleLoop: (nextSnapshot) => this.getDraftSampleLoop(nextSnapshot),
+        drawRoundedRect: (ctx, x, y, width, height, radius) => this.drawRoundedRect(ctx, x, y, width, height, radius),
+      });
+    } finally {
+      stop();
+    }
   }
 
   private getSampleEditorLayout(width: number, height: number): { left: number; top: number; width: number; height: number } {
@@ -1419,16 +1447,33 @@ export class TrackerApplication {
   }
 
   private ensurePlaybackCoordinator(): void {
-    if (this.playbackFrame !== null || this.playbackTickActive || !this.hasPlaybackActivity()) {
+    if (this.playbackFrame !== null || this.playbackDelayTimer !== null || this.playbackTickActive || !this.hasPlaybackActivity()) {
       return;
     }
 
+    const scheduleNextTick = (delayMs: number): void => {
+      const safeDelayMs = Math.max(0, delayMs);
+      if (safeDelayMs <= 1) {
+        this.playbackFrame = window.requestAnimationFrame(tick);
+        return;
+      }
+
+      this.playbackDelayTimer = window.setTimeout(() => {
+        this.playbackDelayTimer = null;
+        this.playbackFrame = window.requestAnimationFrame(tick);
+      }, safeDelayMs);
+    };
+
     const tick = (now: number): void => {
+      const stop = uiPerfMonitor.begin('playback.tick');
+      uiPerfMonitor.setTag('hidden', typeof document !== 'undefined' && document.hidden ? '1' : '0');
+      uiPerfMonitor.setTag('view', this.viewMode);
       this.playbackTickActive = true;
       this.playbackFrame = null;
       if (!this.snapshot || !this.engine) {
         this.playbackTickActive = false;
         this.stopPlaybackCoordinator();
+        stop();
         return;
       }
 
@@ -1436,6 +1481,7 @@ export class TrackerApplication {
       if (!this.hasPlaybackActivity()) {
         this.playbackTickActive = false;
         this.stopPlaybackCoordinator();
+        stop();
         return;
       }
 
@@ -1446,12 +1492,12 @@ export class TrackerApplication {
         && (this.lastPlaybackCoordinatorAt === null || now - this.lastPlaybackCoordinatorAt >= liveCadenceMs)
       ) {
         this.lastPlaybackCoordinatorAt = now;
-        const liveState = this.engine.getLiveState();
+        const liveState = uiPerfMonitor.measure('playback.getLiveState', () => this.engine!.getLiveState());
         if (liveState && liveState.version !== this.lastLiveStateVersion) {
           const previousPattern = this.snapshot.pattern.index;
           this.lastLiveStateVersion = liveState.version;
           if (liveState.pattern !== previousPattern) {
-            this.snapshot = this.engine.getSnapshot();
+            this.snapshot = uiPerfMonitor.measure('playback.getSnapshot', () => this.engine!.getSnapshot());
             this.lastAppliedLiveStateVersion = liveState.version;
             if (this.viewMode === 'modern') {
               this.syncModernPlaybackUi(this.snapshot, 'transport');
@@ -1470,63 +1516,88 @@ export class TrackerApplication {
         if (this.samplePreviewSession) {
           this.redrawModernCanvases(this.snapshot, 'sample-preview');
         }
-        if (this.snapshot.transport.playing) {
-          this.drawVisualization(this.snapshot);
+        if (
+          this.snapshot.transport.playing
+          && (this.lastVisualizationFrameAt === null || now - this.lastVisualizationFrameAt >= VISUALIZATION_FRAME_INTERVAL_MS)
+        ) {
+          this.drawVisualization(this.snapshot, now);
         }
       }
 
       if (this.hasPlaybackActivity()) {
+        const nextDelayMs = Math.max(0, PLAYBACK_FRAME_INTERVAL_MS - (performance.now() - now));
         this.playbackTickActive = false;
-        this.playbackFrame = window.requestAnimationFrame(tick);
+        scheduleNextTick(nextDelayMs);
       } else {
         this.playbackTickActive = false;
         this.stopPlaybackCoordinator();
       }
+      stop();
     };
 
-    this.playbackFrame = window.requestAnimationFrame(tick);
+    scheduleNextTick(0);
   }
 
   private drawQuadrascopeStack(quadrascope: QuadrascopeState | null): void {
     if (this.viewMode !== 'modern') {
       return;
     }
-    drawModernQuadrascopeStack({
-      canvas: this.quadrascopeCanvas,
-      quadrascope,
-      height: QUADRASCOPE_HEIGHT,
-      drawRoundedRect: (ctx, x, y, width, height, radius) => this.drawRoundedRect(ctx, x, y, width, height, radius),
-    });
+    const stop = uiPerfMonitor.begin('ui.draw.visualization.quadStack');
+    try {
+      drawModernQuadrascopeStack({
+        canvas: this.quadrascopeCanvas,
+        quadrascope,
+        height: QUADRASCOPE_HEIGHT,
+        drawRoundedRect: (ctx, x, y, width, height, radius) => this.drawRoundedRect(ctx, x, y, width, height, radius),
+      });
+    } finally {
+      stop();
+    }
   }
 
   private drawQuadrascopeClassic(quadrascope: QuadrascopeState | null): void {
     if (this.viewMode !== 'modern') {
       return;
     }
-    drawModernQuadrascopeClassic({
-      canvas: this.quadrascopeCanvas,
-      quadrascope,
-      height: QUADRASCOPE_HEIGHT,
-      drawRoundedRect: (ctx, x, y, width, height, radius) => this.drawRoundedRect(ctx, x, y, width, height, radius),
-    });
+    const stop = uiPerfMonitor.begin('ui.draw.visualization.quadClassic');
+    try {
+      drawModernQuadrascopeClassic({
+        canvas: this.quadrascopeCanvas,
+        quadrascope,
+        height: QUADRASCOPE_HEIGHT,
+        drawRoundedRect: (ctx, x, y, width, height, radius) => this.drawRoundedRect(ctx, x, y, width, height, radius),
+      });
+    } finally {
+      stop();
+    }
   }
 
   private drawSpectrumAnalyzer(quadrascope: QuadrascopeState | null): void {
     if (this.viewMode !== 'modern') {
       return;
     }
-    this.spectrumVisualizationEngine.render(
-      this.spectrumFrameSource.buildFrame(quadrascope, this.visualizationMode === 'split'),
-    );
+    const stop = uiPerfMonitor.begin('ui.draw.visualization.spectrum');
+    try {
+      this.spectrumVisualizationEngine.render(
+        this.spectrumFrameSource.buildFrame(quadrascope, this.visualizationMode === 'split'),
+      );
+    } finally {
+      stop();
+    }
   }
 
   private drawSignalTrails(quadrascope: QuadrascopeState | null): void {
     if (this.viewMode !== 'modern') {
       return;
     }
-    this.signalTrailsVisualizationEngine.render(
-      this.signalTrailsFrameSource.buildFrame(quadrascope),
-    );
+    const stop = uiPerfMonitor.begin('ui.draw.visualization.signalTrails');
+    try {
+      this.signalTrailsVisualizationEngine.render(
+        this.signalTrailsFrameSource.buildFrame(quadrascope),
+      );
+    } finally {
+      stop();
+    }
   }
 
   private syncPianoNotes(snapshot: TrackerSnapshot, quadrascope: QuadrascopeState | null): void {
@@ -1551,15 +1622,20 @@ export class TrackerApplication {
     if (this.viewMode !== 'modern') {
       return;
     }
+    const stop = uiPerfMonitor.begin('ui.draw.visualization.piano');
     this.decayPianoGlow();
     void snapshot;
     void quadrascope;
-    drawModernPianoVisualizer({
-      canvas: this.pianoCanvas,
-      pianoGlowLevels: this.pianoGlowLevels,
-      height: PIANO_HEIGHT,
-      drawRoundedRect: (ctx, x, y, width, height, radius) => this.drawRoundedRect(ctx, x, y, width, height, radius),
-    });
+    try {
+      drawModernPianoVisualizer({
+        canvas: this.pianoCanvas,
+        pianoGlowLevels: this.pianoGlowLevels,
+        height: PIANO_HEIGHT,
+        drawRoundedRect: (ctx, x, y, width, height, radius) => this.drawRoundedRect(ctx, x, y, width, height, radius),
+      });
+    } finally {
+      stop();
+    }
   }
 
   private drawPatternCanvas(snapshot: TrackerSnapshot): void {
@@ -1572,17 +1648,22 @@ export class TrackerApplication {
       return;
     }
 
-    drawModernPatternCanvas({
-      canvas: this.patternCanvas,
-      snapshot,
-      hostWidth: host.clientWidth || host.getBoundingClientRect().width || 960,
-      visibleRowCount: MODERN_VISIBLE_PATTERN_ROWS,
-      rowHeight: PATTERN_ROW_HEIGHT,
-      gutter: PATTERN_GUTTER,
-      rowIndexWidth: PATTERN_ROW_INDEX_WIDTH,
-      minChannelWidth: PATTERN_MIN_CHANNEL_WIDTH,
-      drawRoundedRect: (ctx, x, y, width, height, radius) => this.drawRoundedRect(ctx, x, y, width, height, radius),
-    });
+    const stop = uiPerfMonitor.begin('ui.draw.pattern');
+    try {
+      drawModernPatternCanvas({
+        canvas: this.patternCanvas,
+        snapshot,
+        hostWidth: host.clientWidth || host.getBoundingClientRect().width || 960,
+        visibleRowCount: MODERN_VISIBLE_PATTERN_ROWS,
+        rowHeight: PATTERN_ROW_HEIGHT,
+        gutter: PATTERN_GUTTER,
+        rowIndexWidth: PATTERN_ROW_INDEX_WIDTH,
+        minChannelWidth: PATTERN_MIN_CHANNEL_WIDTH,
+        drawRoundedRect: (ctx, x, y, width, height, radius) => this.drawRoundedRect(ctx, x, y, width, height, radius),
+      });
+    } finally {
+      stop();
+    }
   }
 
   private drawRoundedRect(
@@ -1822,12 +1903,14 @@ export class TrackerApplication {
         return;
     }
 
+    const action = target.dataset.action ?? '';
+
     if (!this.engine || !this.snapshot) {
       return;
     }
 
     if (this.synthEngine && this.synthSnapshot) {
-      switch (target.dataset.action) {
+    switch (action) {
         case 'sample-creator-arm-synth':
           this.synthEngine.dispatch({ type: 'input-arm/set', target: 'synth' });
           return;
@@ -1912,6 +1995,7 @@ export class TrackerApplication {
       setVisualizationMode: (mode) => { this.visualizationMode = mode; },
       shiftVisualization: (direction) => this.shiftVisualization(direction),
       });
+
     if (this.synthEngine && this.snapshot) {
       this.sampleCreatorState.targetSlot = this.snapshot.selectedSample;
       this.synthEngine.dispatch({ type: 'target-slot/set', slot: this.snapshot.selectedSample });
