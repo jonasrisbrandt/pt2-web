@@ -104,10 +104,25 @@ export interface StrokePolylineCommand {
   width: number;
 }
 
+export interface TrailColumnsCommand {
+  kind: 'trail-columns';
+  x: number;
+  top: number;
+  width: number;
+  laneStep: number;
+  historyLength: number;
+  maxValue: number;
+  columnWidth: number;
+  radius: number;
+  maxBarHeight: number;
+  lanes: readonly HistorySeriesLane[];
+}
+
 export type DrawCommand =
   | ClearCommand
   | FillRoundedRectCommand
-  | StrokePolylineCommand;
+  | StrokePolylineCommand
+  | TrailColumnsCommand;
 
 export interface VisualizationModeRenderer<TFrame extends VisualizationFrame> {
   buildCommands(frame: TFrame, viewport: VisualizationViewport): readonly DrawCommand[];

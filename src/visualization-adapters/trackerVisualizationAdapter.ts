@@ -65,6 +65,7 @@ export class TrackerSpectrumFrameSource {
 
 export class TrackerSignalTrailsFrameSource {
   private readonly history = new HistoryRingBuffer(4, TRAIL_HISTORY_CAPACITY);
+  private readonly energies = new Float32Array(4);
   private readonly laneBuffers = Array.from({ length: 4 }, () => new Float32Array(TRAIL_HISTORY_CAPACITY));
   private readonly frame: SignalTrailsVisualizationFrame = {
     mode: 'signal-trails',
@@ -94,7 +95,7 @@ export class TrackerSignalTrailsFrameSource {
 
   buildFrame(quadrascope: QuadrascopeState | null): SignalTrailsVisualizationFrame {
     const channels = quadrascope?.channels ?? [];
-    const energies = new Float32Array(4);
+    this.energies.fill(0);
 
     for (let channel = 0; channel < 4; channel += 1) {
       const samplePoints = channels[channel]?.sample ?? [];
@@ -104,10 +105,10 @@ export class TrackerSignalTrailsFrameSource {
       }
 
       const normalizedEnergy = samplePoints.length === 0 ? 0 : (energy / samplePoints.length);
-      energies[channel] = normalizedEnergy;
+      this.energies[channel] = normalizedEnergy;
     }
 
-    this.history.push(energies);
+    this.history.push(this.energies);
     const historyLength = this.history.getSize();
     for (let lane = 0; lane < 4; lane += 1) {
       this.history.copyOrderedLane(lane, this.laneBuffers[lane]);

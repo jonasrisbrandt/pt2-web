@@ -1,5 +1,5 @@
 import { parseCssColor, rgbaToFloatArray } from '../colorUtils';
-import type { DrawCommand, FillRoundedRectCommand, StrokePolylineCommand, VisualizationBackend, VisualizationViewport } from '../types';
+import type { DrawCommand, FillRoundedRectCommand, StrokePolylineCommand, TrailColumnsCommand, VisualizationBackend, VisualizationViewport } from '../types';
 
 const RECT_VERTEX_SHADER = `#version 300 es
 precision highp float;
@@ -128,28 +128,16 @@ interface LineProgramBindings {
   colorLocation: WebGLUniformLocation;
 }
 
-const getRectFillData = (command: FillRoundedRectCommand): {
-  startColor: [number, number, number, number];
-  endColor: [number, number, number, number];
-  gradientAxis: number;
-} => {
-  if (command.fill.kind === 'solid') {
-    const color = rgbaToFloatArray(parseCssColor(command.fill.color));
-    return { startColor: color, endColor: color, gradientAxis: 0 };
-  }
-
-  return {
-    startColor: rgbaToFloatArray(parseCssColor(command.fill.startColor)),
-    endColor: rgbaToFloatArray(parseCssColor(command.fill.endColor)),
-    gradientAxis: command.fill.direction === 'horizontal' ? 1 : 0,
-  };
-};
-
 export class Webgl2VisualizationBackend implements VisualizationBackend {
   readonly kind = 'webgl2' as const;
   private readonly gl: WebGL2RenderingContext;
   private readonly rectBindings: RectProgramBindings;
   private readonly lineBindings: LineProgramBindings;
+  private readonly rectCommands: FillRoundedRectCommand[] = [];
+  private readonly lineCommands: StrokePolylineCommand[] = [];
+  private readonly trailCommands: TrailColumnsCommand[] = [];
+  private readonly colorCache = new Map<string, [number, number, number, number]>();
+  private readonly alphaRampCache = new Map<number, Float32Array>();
   private rectInstanceData = new Float32Array(14 * 256);
   private linePointData = new Float32Array(0);
 
@@ -191,22 +179,29 @@ export class Webgl2VisualizationBackend implements VisualizationBackend {
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
 
-    const rectCommands: FillRoundedRectCommand[] = [];
-    const lineCommands: StrokePolylineCommand[] = [];
+    this.rectCommands.length = 0;
+    this.lineCommands.length = 0;
+    this.trailCommands.length = 0;
     for (const command of commands) {
       if (command.kind === 'fill-rounded-rect') {
-        rectCommands.push(command);
+        this.rectCommands.push(command);
       } else if (command.kind === 'stroke-polyline') {
-        lineCommands.push(command);
+        this.lineCommands.push(command);
+      } else if (command.kind === 'trail-columns') {
+        this.trailCommands.push(command);
       }
     }
 
-    if (rectCommands.length > 0) {
-      this.renderRectCommands(rectCommands, viewport);
+    if (this.rectCommands.length > 0) {
+      this.renderRectCommands(this.rectCommands, viewport);
     }
 
-    if (lineCommands.length > 0) {
-      this.renderLineCommands(lineCommands, viewport);
+    if (this.trailCommands.length > 0) {
+      this.renderTrailCommands(this.trailCommands, viewport);
+    }
+
+    if (this.lineCommands.length > 0) {
+      this.renderLineCommands(this.lineCommands, viewport);
     }
   }
 
@@ -299,12 +294,47 @@ export class Webgl2VisualizationBackend implements VisualizationBackend {
     this.rectInstanceData = new Float32Array(nextLength);
   }
 
+  private getCachedColorFloats(color: string): [number, number, number, number] {
+    const cached = this.colorCache.get(color);
+    if (cached) {
+      return cached;
+    }
+
+    const parsed = rgbaToFloatArray(parseCssColor(color));
+    this.colorCache.set(color, parsed);
+    return parsed;
+  }
+
+  private getAlphaRamp(historyLength: number): Float32Array {
+    const cached = this.alphaRampCache.get(historyLength);
+    if (cached) {
+      return cached;
+    }
+
+    const ramp = new Float32Array(historyLength);
+    for (let index = 0; index < historyLength; index += 1) {
+      ramp[index] = 0.08 + ((index / Math.max(1, historyLength - 1)) * 0.88);
+    }
+    this.alphaRampCache.set(historyLength, ramp);
+    return ramp;
+  }
+
   private renderRectCommands(commands: readonly FillRoundedRectCommand[], viewport: VisualizationViewport): void {
     this.ensureRectCapacity(commands.length);
 
     let offset = 0;
     for (const command of commands) {
-      const fillData = getRectFillData(command);
+      const fillData = command.fill.kind === 'solid'
+        ? {
+            startColor: this.getCachedColorFloats(command.fill.color),
+            endColor: this.getCachedColorFloats(command.fill.color),
+            gradientAxis: 0,
+          }
+        : {
+            startColor: this.getCachedColorFloats(command.fill.startColor),
+            endColor: this.getCachedColorFloats(command.fill.endColor),
+            gradientAxis: command.fill.direction === 'horizontal' ? 1 : 0,
+          };
       this.rectInstanceData[offset] = command.x;
       this.rectInstanceData[offset + 1] = command.y;
       this.rectInstanceData[offset + 2] = command.width;
@@ -326,6 +356,68 @@ export class Webgl2VisualizationBackend implements VisualizationBackend {
     gl.bindVertexArray(null);
   }
 
+  private renderTrailCommands(commands: readonly TrailColumnsCommand[], viewport: VisualizationViewport): void {
+    let totalPotentialInstances = 0;
+    for (const command of commands) {
+      totalPotentialInstances += command.lanes.length * Math.max(1, command.historyLength);
+    }
+
+    this.ensureRectCapacity(totalPotentialInstances);
+
+    let offset = 0;
+    for (const command of commands) {
+      const historyLength = Math.max(1, command.historyLength);
+      const slotWidth = command.width / historyLength;
+      const alphaRamp = this.getAlphaRamp(historyLength);
+      const maxValue = Math.max(0.0001, command.maxValue);
+
+      for (let laneIndex = 0; laneIndex < command.lanes.length; laneIndex += 1) {
+        const lane = command.lanes[laneIndex];
+        const values = lane?.values ?? new Float32Array(0);
+        const baseColor = this.getCachedColorFloats(lane?.color ?? '#ffffff');
+        const laneMid = command.top + (laneIndex * command.laneStep) + (command.laneStep / 2);
+
+        for (let index = 0; index < historyLength; index += 1) {
+          const amplitude = Math.max(0, Math.min(1, (values[index] ?? 0) / maxValue));
+          if (amplitude <= 0) {
+            continue;
+          }
+
+          const barHeight = Math.max(2, amplitude * command.maxBarHeight);
+          const alpha = baseColor[3] * (alphaRamp[index] ?? 1);
+          this.rectInstanceData[offset] = command.x + (index * slotWidth);
+          this.rectInstanceData[offset + 1] = laneMid - (barHeight / 2);
+          this.rectInstanceData[offset + 2] = command.columnWidth;
+          this.rectInstanceData[offset + 3] = barHeight;
+          this.rectInstanceData[offset + 4] = Math.max(0, command.radius);
+          this.rectInstanceData[offset + 5] = baseColor[0];
+          this.rectInstanceData[offset + 6] = baseColor[1];
+          this.rectInstanceData[offset + 7] = baseColor[2];
+          this.rectInstanceData[offset + 8] = alpha;
+          this.rectInstanceData[offset + 9] = baseColor[0];
+          this.rectInstanceData[offset + 10] = baseColor[1];
+          this.rectInstanceData[offset + 11] = baseColor[2];
+          this.rectInstanceData[offset + 12] = alpha;
+          this.rectInstanceData[offset + 13] = 0;
+          offset += 14;
+        }
+      }
+    }
+
+    if (offset === 0) {
+      return;
+    }
+
+    const gl = this.gl;
+    gl.useProgram(this.rectBindings.program);
+    gl.uniform2f(this.rectBindings.viewportLocation, viewport.width, viewport.height);
+    gl.bindVertexArray(this.rectBindings.vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.rectBindings.instanceBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, this.rectInstanceData.subarray(0, offset), gl.DYNAMIC_DRAW);
+    gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, Math.floor(offset / 14));
+    gl.bindVertexArray(null);
+  }
+
   private renderLineCommands(commands: readonly StrokePolylineCommand[], viewport: VisualizationViewport): void {
     const gl = this.gl;
     gl.useProgram(this.lineBindings.program);
@@ -341,7 +433,7 @@ export class Webgl2VisualizationBackend implements VisualizationBackend {
         this.linePointData = new Float32Array(command.points.length);
       }
       this.linePointData.set(command.points.subarray(0, command.points.length), 0);
-      const color = rgbaToFloatArray(parseCssColor(command.color));
+      const color = this.getCachedColorFloats(command.color);
       gl.uniform4f(this.lineBindings.colorLocation, color[0], color[1], color[2], color[3]);
       gl.bindBuffer(gl.ARRAY_BUFFER, this.lineBindings.pointBuffer);
       gl.bufferData(gl.ARRAY_BUFFER, this.linePointData.subarray(0, command.points.length), gl.DYNAMIC_DRAW);

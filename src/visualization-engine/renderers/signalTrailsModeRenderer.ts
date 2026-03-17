@@ -1,8 +1,8 @@
-import { parseCssColor } from '../colorUtils';
 import type {
   DrawCommand,
   FillRoundedRectCommand,
   SignalTrailsVisualizationFrame,
+  TrailColumnsCommand,
   VisualizationModeRenderer,
   VisualizationViewport,
 } from '../types';
@@ -17,17 +17,24 @@ const createRectCommand = (): FillRoundedRectCommand => ({
   fill: { kind: 'solid', color: 'rgba(0, 0, 0, 0)' },
 });
 
-const withAlpha = (color: string, alpha: number): string => {
-  const parsed = parseCssColor(color);
-  return `rgba(${parsed.r}, ${parsed.g}, ${parsed.b}, ${Math.max(0, Math.min(1, alpha)).toFixed(3)})`;
-};
-
 export class SignalTrailsModeRenderer implements VisualizationModeRenderer<SignalTrailsVisualizationFrame> {
   private readonly commands: DrawCommand[] = [];
   private readonly panelCommand = createRectCommand();
+  private readonly trailColumnsCommand: TrailColumnsCommand = {
+    kind: 'trail-columns',
+    x: 0,
+    top: 0,
+    width: 0,
+    laneStep: 0,
+    historyLength: 0,
+    maxValue: 1,
+    columnWidth: 3,
+    radius: 3,
+    maxBarHeight: 0,
+    lanes: [],
+  };
   private laneCommands: FillRoundedRectCommand[] = [];
   private baselineCommands: FillRoundedRectCommand[] = [];
-  private columnCommands: FillRoundedRectCommand[] = [];
 
   buildCommands(frame: SignalTrailsVisualizationFrame, viewport: VisualizationViewport): readonly DrawCommand[] {
     this.commands.length = 0;
@@ -44,8 +51,17 @@ export class SignalTrailsModeRenderer implements VisualizationModeRenderer<Signa
     const laneCount = frame.signal.lanes.length;
     const laneHeight = (viewport.height - 28) / Math.max(1, laneCount);
     this.ensureLaneCapacity(laneCount);
+    this.trailColumnsCommand.x = 14;
+    this.trailColumnsCommand.top = 12;
+    this.trailColumnsCommand.width = viewport.width - 28;
+    this.trailColumnsCommand.laneStep = laneHeight;
+    this.trailColumnsCommand.historyLength = Math.max(1, frame.signal.historyLength);
+    this.trailColumnsCommand.maxValue = frame.signal.maxValue;
+    this.trailColumnsCommand.columnWidth = 3;
+    this.trailColumnsCommand.radius = 3;
+    this.trailColumnsCommand.maxBarHeight = laneHeight - 18;
+    this.trailColumnsCommand.lanes = frame.signal.lanes;
 
-    let columnCount = 0;
     for (let lane = 0; lane < laneCount; lane += 1) {
       const laneTop = 12 + (lane * laneHeight);
       const laneCommand = this.laneCommands[lane];
@@ -69,35 +85,9 @@ export class SignalTrailsModeRenderer implements VisualizationModeRenderer<Signa
         color: 'rgba(239, 248, 231, 0.08)',
       };
       this.commands.push(baselineCommand);
-
-      const history = frame.signal.lanes[lane]?.values ?? new Float32Array(0);
-      const historyLength = Math.max(1, frame.signal.historyLength);
-      const slotWidth = (viewport.width - 28) / historyLength;
-
-      for (let index = 0; index < historyLength; index += 1) {
-        const amplitude = Math.max(0, Math.min(1, (history[index] ?? 0) / Math.max(0.0001, frame.signal.maxValue)));
-        if (amplitude <= 0) {
-          continue;
-        }
-
-        this.ensureColumnCapacity(columnCount + 1);
-        const command = this.columnCommands[columnCount];
-        const laneMid = laneTop + (laneHeight / 2);
-        const alpha = 0.08 + ((index / Math.max(1, historyLength - 1)) * 0.88);
-        const barHeight = Math.max(2, amplitude * (laneHeight - 18));
-        command.x = 14 + (index * slotWidth);
-        command.y = laneMid - (barHeight / 2);
-        command.width = 3;
-        command.height = barHeight;
-        command.radius = 3;
-        command.fill = {
-          kind: 'solid',
-          color: withAlpha(frame.signal.lanes[lane]?.color ?? '#ffffff', alpha),
-        };
-        this.commands.push(command);
-        columnCount += 1;
-      }
     }
+
+    this.commands.push(this.trailColumnsCommand);
 
     return this.commands;
   }
@@ -111,12 +101,6 @@ export class SignalTrailsModeRenderer implements VisualizationModeRenderer<Signa
   private ensureBaselineCapacity(count: number): void {
     while (this.baselineCommands.length < count) {
       this.baselineCommands.push(createRectCommand());
-    }
-  }
-
-  private ensureColumnCapacity(count: number): void {
-    while (this.columnCommands.length < count) {
-      this.columnCommands.push(createRectCommand());
     }
   }
 }
