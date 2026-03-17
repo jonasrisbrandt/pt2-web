@@ -6,8 +6,9 @@
         <strong
           class="sample-detail-title panel-title panel-title--editable"
           data-role="selected-sample-title"
-          v-html="sampleTitleHtml"
-        />
+        >
+          <InlineNameFieldView v-bind="sampleTitle" />
+        </strong>
       </div>
       <div class="sample-detail-actions">
         <ToolIconButtonView
@@ -54,6 +55,7 @@ import { computed } from 'vue';
 import { featureFlags } from '../../config/featureFlags';
 import { formatSampleLength } from '../../ui/formatters';
 import type { SelectedSamplePanelRenderOptions } from '../../ui-modern/components/markupRenderer';
+import InlineNameFieldView from './InlineNameFieldView.vue';
 import ToolIconButtonView from './ToolIconButtonView.vue';
 
 const props = defineProps<SelectedSamplePanelRenderOptions>();

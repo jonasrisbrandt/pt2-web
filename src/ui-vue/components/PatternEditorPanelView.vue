@@ -43,9 +43,10 @@
     <div class="panel-body">
       <div class="pattern-header">
         <span>Row</span>
-        <span
-          style="display: contents"
-          v-html="trackHeadersHtml"
+        <TrackHeaderView
+          v-for="trackHeader in trackHeaders"
+          :key="trackHeader.channel"
+          v-bind="trackHeader"
         />
       </div>
       <div
@@ -58,6 +59,7 @@
 
 <script setup lang="ts">
 import type { PatternPanelRenderOptions } from '../../ui-modern/components/appShellRenderer';
+import TrackHeaderView from './TrackHeaderView.vue';
 
 defineProps<PatternPanelRenderOptions>();
 </script>

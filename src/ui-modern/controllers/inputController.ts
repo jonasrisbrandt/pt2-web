@@ -10,10 +10,9 @@ export interface ModernInputActionContext {
   getSampleEditorView: (snapshot: TrackerSnapshot) => { start: number; length: number; end: number };
   invalidateSampleCache: (sample: number) => void;
   refreshSelectedSampleWaveform: (snapshot: TrackerSnapshot, force?: boolean) => void;
-  setSuppressNextModernRender?: (value: boolean) => void;
   setSampleEditorViewOverride: (value: { sample: number; start: number; length: number } | null) => void;
   setSnapshot: (snapshot: TrackerSnapshot) => void;
-  updateModernLiveRegions: (snapshot: TrackerSnapshot) => void;
+  render: () => void;
 }
 
 export const handleModernInputAction = ({
@@ -24,10 +23,9 @@ export const handleModernInputAction = ({
   getSampleEditorView,
   invalidateSampleCache,
   refreshSelectedSampleWaveform,
-  setSuppressNextModernRender,
   setSampleEditorViewOverride,
   setSnapshot,
-  updateModernLiveRegions,
+  render,
 }: ModernInputActionContext): boolean => {
   const inputKey = target.dataset.input;
   if (!inputKey) {
@@ -48,14 +46,12 @@ export const handleModernInputAction = ({
       if (!canEdit) {
         return true;
       }
-      setSuppressNextModernRender?.(true);
       engine.dispatch({ type: 'sample/update', sample: selectedSample, patch: { volume: clamp(Number(target.value), 0, 64) } });
       break;
     case 'sample-finetune':
       if (!canEdit) {
         return true;
       }
-      setSuppressNextModernRender?.(true);
       engine.dispatch({ type: 'sample/update', sample: selectedSample, patch: { fineTune: clamp(Number(target.value), -8, 7) } });
       break;
     case 'sample-loop-start':
@@ -82,7 +78,7 @@ export const handleModernInputAction = ({
         start: Math.max(0, Number(target.value)),
         length: getSampleEditorView(snapshot).length,
       });
-      updateModernLiveRegions(snapshot);
+      render();
       return true;
     default:
       return false;
@@ -98,12 +94,12 @@ export const handleModernInputAction = ({
     || inputKey === 'sample-loop-end'
     || inputKey === 'sample-loop-enabled'
   ) {
-    updateModernLiveRegions(nextSnapshot);
+    render();
     return true;
   }
 
   invalidateSampleCache(selectedSample);
   refreshSelectedSampleWaveform(nextSnapshot, true);
-  updateModernLiveRegions(nextSnapshot);
+  render();
   return true;
 };

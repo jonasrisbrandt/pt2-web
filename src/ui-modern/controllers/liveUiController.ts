@@ -60,12 +60,9 @@ export interface SamplePanelUpdateOptions {
   resolveSamplePage: (snapshot: TrackerSnapshot) => number;
   getSamplePageCount: (snapshot: TrackerSnapshot) => number;
   getSamplePanelKey: (snapshot: TrackerSnapshot, samplePage: number) => string;
-  getSelectedSampleHeading: (sample: SampleSlot) => string;
-  renderSampleBank: (snapshot: TrackerSnapshot, samplePage: number) => string;
-  mountSampleBank?: (container: HTMLElement, snapshot: TrackerSnapshot, samplePage: number) => void;
-  renderSelectedSamplePanel: (sample: SampleSlot, snapshot: TrackerSnapshot) => string;
-  mountSelectedSamplePanel?: (container: HTMLElement, sample: SampleSlot, snapshot: TrackerSnapshot) => void;
-  renderSelectedSampleTitle?: (sample: SampleSlot) => string;
+  mountSampleBank: (container: HTMLElement, snapshot: TrackerSnapshot, samplePage: number) => void;
+  mountSelectedSamplePanel: (container: HTMLElement, sample: SampleSlot, snapshot: TrackerSnapshot) => void;
+  renderSelectedSampleTitle: (sample: SampleSlot) => string;
   syncSelectedSampleTitle?: boolean;
 }
 
@@ -78,10 +75,7 @@ export const updateSamplePanel = ({
   resolveSamplePage,
   getSamplePageCount,
   getSamplePanelKey,
-  getSelectedSampleHeading,
-  renderSampleBank,
   mountSampleBank,
-  renderSelectedSamplePanel,
   mountSelectedSamplePanel,
   renderSelectedSampleTitle,
   syncSelectedSampleTitle = true,
@@ -109,16 +103,9 @@ export const updateSamplePanel = ({
     if (syncSelectedSampleTitle) {
       const title = refs.selectedSampleTitle;
       if (title) {
-        if (renderSelectedSampleTitle) {
-          const html = renderSelectedSampleTitle(selectedSample);
-          if (title.innerHTML !== html) {
-            title.innerHTML = html;
-          }
-        } else {
-          const text = getSelectedSampleHeading(selectedSample);
-          if (title.textContent !== text) {
-            title.textContent = text;
-          }
+        const html = renderSelectedSampleTitle(selectedSample);
+        if (title.innerHTML !== html) {
+          title.innerHTML = html;
         }
       }
     }
@@ -133,20 +120,12 @@ export const updateSamplePanel = ({
 
   const bank = refs.sampleBank;
   if (bank) {
-    if (mountSampleBank) {
-      mountSampleBank(bank, snapshot, samplePage);
-    } else {
-      bank.innerHTML = renderSampleBank(snapshot, samplePage);
-    }
+    mountSampleBank(bank, snapshot, samplePage);
   }
 
   const detail = refs.sampleDetailContent;
   if (detail) {
-    if (mountSelectedSamplePanel) {
-      mountSelectedSamplePanel(detail, selectedSample, snapshot);
-    } else {
-      detail.innerHTML = renderSelectedSamplePanel(selectedSample, snapshot);
-    }
+    mountSelectedSamplePanel(detail, selectedSample, snapshot);
     const previewHost = detail.querySelector<HTMLElement>('[data-role="sample-preview-host"]');
     if (previewHost) {
       previewHost.replaceChildren(samplePreviewCanvas);
@@ -156,11 +135,7 @@ export const updateSamplePanel = ({
   if (syncSelectedSampleTitle) {
     const title = refs.selectedSampleTitle;
     if (title) {
-      if (renderSelectedSampleTitle) {
-        title.innerHTML = renderSelectedSampleTitle(selectedSample);
-      } else {
-        title.textContent = getSelectedSampleHeading(selectedSample);
-      }
+      title.innerHTML = renderSelectedSampleTitle(selectedSample);
     }
   }
   if (refs.selectedSampleHint) {

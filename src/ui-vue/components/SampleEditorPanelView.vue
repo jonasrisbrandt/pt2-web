@@ -19,8 +19,10 @@
         </button>
         <h2
           class="panel-title panel-title--editable panel-title--section-detail"
-          v-html="`Sample ${sampleNumber} ${selectedSampleTitleHtml}`"
-        />
+        >
+          Sample {{ sampleNumber }}
+          <InlineNameFieldView v-bind="selectedSampleTitle" />
+        </h2>
       </div>
       <div class="panel-head-actions">
         <div class="sample-editor-toolbar">
@@ -214,6 +216,7 @@
 import { computed } from 'vue';
 import { clamp } from '../../ui/appShared';
 import type { SampleEditorPanelRenderOptions } from '../../ui-modern/components/markupRenderer';
+import InlineNameFieldView from './InlineNameFieldView.vue';
 import ToolIconButtonView from './ToolIconButtonView.vue';
 
 const props = defineProps<SampleEditorPanelRenderOptions>();

@@ -26,15 +26,7 @@
           role="tablist"
           aria-label="View mode"
         >
-          <ViewToggleGroupView
-            v-if="viewToggleOptions"
-            :buttons="viewToggleOptions"
-          />
-          <div
-            v-else
-            style="display: contents"
-            v-html="viewToggleHtml"
-          />
+          <ViewToggleGroupView :buttons="viewToggleOptions" />
         </div>
       </div>
     </div>
@@ -85,10 +77,11 @@
 
   <main :class="['workspace', `workspace--${workspaceMode}`]">
     <section
-      v-if="workspaceMode === 'sample-creator'"
+      v-if="workspaceMode === 'sample-creator' && sampleCreatorOptions"
       class="sample-creator-shell"
-      v-html="sampleCreatorHtml"
-    />
+    >
+      <SampleCreatorView v-bind="sampleCreatorOptions" />
+    </section>
     <template v-else>
       <section class="tracker-stack">
         <article :class="['panel', 'module-panel', { 'is-collapsed': moduleCollapsed }]">
@@ -112,34 +105,19 @@
               <h2
                 class="panel-title panel-title--editable panel-title--section-detail"
                 data-role="song-title"
-                v-html="songTitleHtml"
-              />
+              >
+                <InlineNameFieldView v-bind="songTitle" />
+              </h2>
             </div>
             <div class="panel-head-actions">
               <div class="module-transport-controls">
-                <ModuleTransportControlsView
-                  v-if="moduleTransportOptions"
-                  :buttons="moduleTransportOptions"
-                />
-                <div
-                  v-else
-                  style="display: contents"
-                  v-html="transportControlsHtml"
-                />
+                <ModuleTransportControlsView :buttons="moduleTransportOptions" />
               </div>
             </div>
           </div>
           <div class="panel-body">
             <div class="module-grid">
-              <ModuleGridView
-                v-if="moduleGridOptions"
-                :cards="moduleGridOptions.cards"
-              />
-              <div
-                v-else
-                style="display: contents"
-                v-html="moduleCardsHtml"
-              />
+              <ModuleGridView :cards="moduleGridOptions.cards" />
             </div>
           </div>
         </article>
@@ -169,33 +147,7 @@
             </div>
             <div class="panel-head-actions">
               <div class="visualization-controls">
-                <IconButtonGroupView
-                  v-if="visualizationControlOptions"
-                  :buttons="visualizationControlOptions"
-                />
-                <div
-                  v-else
-                  style="display: contents"
-                >
-                  <button
-                    type="button"
-                    class="icon-button"
-                    data-action="visualization-piano"
-                    v-html="`${visualizationPianoIconHtml}<span class=&quot;sr-only&quot;>Show piano visualization</span>`"
-                  />
-                  <button
-                    type="button"
-                    class="icon-button"
-                    data-action="visualization-prev"
-                    v-html="`${visualizationPrevIconHtml}<span class=&quot;sr-only&quot;>Previous visualization</span>`"
-                  />
-                  <button
-                    type="button"
-                    class="icon-button"
-                    data-action="visualization-next"
-                    v-html="`${visualizationNextIconHtml}<span class=&quot;sr-only&quot;>Next visualization</span>`"
-                  />
-                </div>
+                <IconButtonGroupView :buttons="visualizationControlOptions" />
               </div>
             </div>
           </div>
@@ -214,11 +166,6 @@
         <PatternEditorPanelView
           v-else-if="patternEditorPanelOptions"
           v-bind="patternEditorPanelOptions"
-        />
-        <div
-          v-else
-          style="display: contents"
-          v-html="editorPanelHtml"
         />
       </section>
 
@@ -244,29 +191,7 @@
             </div>
             <div class="panel-head-actions">
               <div class="visualization-controls">
-                <IconButtonGroupView
-                  v-if="samplePageControlOptions"
-                  :buttons="samplePageControlOptions"
-                />
-                <div
-                  v-else
-                  style="display: contents"
-                >
-                  <button
-                    type="button"
-                    class="icon-button"
-                    data-action="sample-page-prev"
-                    :disabled="samplePagePrevDisabled"
-                    v-html="`${samplePagePrevIconHtml}<span class=&quot;sr-only&quot;>Previous sample page</span>`"
-                  />
-                  <button
-                    type="button"
-                    class="icon-button"
-                    data-action="sample-page-next"
-                    :disabled="samplePageNextDisabled"
-                    v-html="`${samplePageNextIconHtml}<span class=&quot;sr-only&quot;>Next sample page</span>`"
-                  />
-                </div>
+                <IconButtonGroupView :buttons="samplePageControlOptions" />
               </div>
             </div>
           </div>
@@ -275,26 +200,10 @@
               class="sample-bank"
               data-role="sample-bank"
             >
-              <SampleBankView
-                v-if="sampleBankOptions"
-                v-bind="sampleBankOptions"
-              />
-              <div
-                v-else
-                style="display: contents"
-                v-html="sampleButtonsHtml"
-              />
+              <SampleBankView v-bind="sampleBankOptions" />
             </div>
             <div data-role="sample-detail-content">
-              <SelectedSamplePanelView
-                v-if="selectedSamplePanelOptions"
-                v-bind="selectedSamplePanelOptions"
-              />
-              <div
-                v-else
-                style="display: contents"
-                v-html="selectedSamplePanelHtml"
-              />
+              <SelectedSamplePanelView v-bind="selectedSamplePanelOptions" />
             </div>
           </div>
         </section>
@@ -303,8 +212,9 @@
           <div class="panel-body">
             <div
               style="display: contents"
-              v-html="classicDebugHtml"
-            />
+            >
+              <ClassicDebugView :enabled="classicDebugOptions.enabled" />
+            </div>
             <div class="engine-canvas-host" />
           </div>
         </section>
@@ -357,18 +267,21 @@
 
 <script setup lang="ts">
 import type { AppShellRenderOptions } from '../../ui-modern/components/appShellRenderer';
+import ClassicDebugView from './ClassicDebugView.vue';
 import IconButtonGroupView from './IconButtonGroupView.vue';
+import InlineNameFieldView from './InlineNameFieldView.vue';
 import MenuItemButton from './MenuItemButton.vue';
 import ModuleGridView from './ModuleGridView.vue';
 import ModuleTransportControlsView from './ModuleTransportControlsView.vue';
 import PatternEditorPanelView from './PatternEditorPanelView.vue';
 import SampleBankView from './SampleBankView.vue';
+import SampleCreatorView from './SampleCreatorView.vue';
 import SampleEditorPanelView from './SampleEditorPanelView.vue';
 import SelectedSamplePanelView from './SelectedSamplePanelView.vue';
 import ViewToggleGroupView from './ViewToggleGroupView.vue';
 
 withDefaults(defineProps<AppShellRenderOptions>(), {
   workspaceMode: 'tracker',
-  sampleCreatorHtml: '',
+  sampleCreatorOptions: null,
 });
 </script>

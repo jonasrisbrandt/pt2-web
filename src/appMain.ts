@@ -1,6 +1,4 @@
 import { createElement, ArrowLeft, ArrowLeftRight, ArrowUpDown, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Crop, FileUp, Focus, Monitor, Pause, PencilLine, Piano, Play, Repeat, Scissors, SlidersHorizontal, Square, View, Volume2, VolumeX } from 'lucide';
-import { createTrackerEngine } from './core/createEngine';
-import { createSynthEngine } from './core/createSynthEngine';
 import { featureFlags } from './config/featureFlags';
 import { translateClassicKeyboardEvent, type ClassicKeyTranslation } from './core/classicKeyboard';
 import { getKeyboardNoteFromKey, interpretKeyboard, isEditableTarget } from './core/keyboard';
@@ -55,11 +53,6 @@ import {
   zoomSampleEditorFromWheel,
 } from './ui-modern/controllers/interactionController';
 import {
-  type LiveUiRefs,
-  updateSamplePanel as updateModernSamplePanel,
-  updateTrackMuteButtons as updateModernTrackMuteButtons,
-} from './ui-modern/controllers/liveUiController';
-import {
   getClassicLogicalPointerPosition as getModernClassicLogicalPointerPosition,
   handleClassicKeyDown as handleModernClassicKeyDown,
   releaseClassicKeys as releaseModernClassicKeys,
@@ -67,11 +60,8 @@ import {
   updateClassicDomDebugPointer,
 } from './ui-modern/classic/classicBridgeController';
 import {
-  type IconButtonRenderOptions,
-  type PatternPanelRenderOptions,
-  type ModuleCardRenderOptions,
-  type ToolIconButtonRenderOptions,
-  type ToolbarButtonRenderOptions,
+  type ClassicDebugRenderOptions,
+  type SampleCreatorRenderOptions,
   type SampleBankRenderOptions,
 } from './ui-modern/components/appShellRenderer';
 import {
@@ -79,24 +69,23 @@ import {
   getSamplePageCount as getModernSamplePageCount,
   getSamplePanelKey as getModernSamplePanelKey,
   getSelectedSampleHeading as getModernSelectedSampleHeading,
-  renderClassicDebug as renderModernClassicDebug,
-  renderModuleStepperCard as renderModernModuleStepperCard,
-  renderModuleValueCard as renderModernModuleValueCard,
   renderModernPatternRow as renderModernPatternRowMarkup,
   renderPatternPaddingRow as renderModernPatternPaddingRow,
-  renderSampleBank as renderModernSampleBank,
-  renderSampleEditorPanel as renderModernSampleEditorPanel,
-  renderSelectedSamplePanel as renderModernSelectedSamplePanel,
   type SampleEditorPanelRenderOptions,
   type SelectedSamplePanelRenderOptions,
-  renderToolIconButton as renderModernToolIconButton,
-  renderToolbarButton as renderModernToolbarButton,
-  renderTrackHeader as renderModernTrackHeader,
 } from './ui-modern/components/markupRenderer';
-import { renderSampleCreatorWorkspace as renderModernSampleCreatorWorkspace } from './ui-modern/components/sampleCreatorRenderer';
+import type { InlineNameFieldRenderOptions } from './ui-modern/components/viewModels';
+import {
+  buildTrackerModuleTransportOptions,
+  buildTrackerShellLiveLabels,
+  buildTrackerShellViewState,
+} from './ui-vue/controllers/trackerShellViewController';
+import {
+  buildTrackerSampleBankOptions,
+  buildTrackerSampleEditorPanelOptions,
+  buildTrackerSelectedSamplePanelOptions,
+} from './ui-vue/controllers/trackerSampleViewController';
 import { renderAppShellView } from './ui-vue/renderers/renderAppShellView';
-import { renderSampleBankView } from './ui-vue/renderers/renderSampleBankView';
-import { renderSelectedSamplePanelView } from './ui-vue/renderers/renderSelectedSamplePanelView';
 import {
   drawPatternCanvas as drawModernPatternCanvas,
   getPatternCanvasLayout as getModernPatternCanvasLayout,
@@ -120,6 +109,7 @@ import {
   triggerPianoGlow as triggerModernPianoGlow,
 } from './ui-modern/components/visualizationRenderer';
 import { createTrackerAppDom } from './ui-modern/session/appDom';
+import { TrackerRuntime } from './trackerRuntime';
 
 declare const __APP_VERSION__: string;
 
@@ -173,13 +163,12 @@ interface SampleCacheEntry {
 
 type ModernRedrawReason = 'full' | 'layout-change' | 'transport' | 'sample-preview' | 'sample-change' | 'ui';
 
-interface ModernDomRefs extends LiveUiRefs {
+interface ModernMountRefs {
   appShell: HTMLElement | null;
   patternHost: HTMLElement | null;
   visualizationHost: HTMLElement | null;
   samplePreviewHost: HTMLElement | null;
   sampleEditorHost: HTMLElement | null;
-  songTitle: HTMLElement | null;
   metricPosition: HTMLElement | null;
   metricPattern: HTMLElement | null;
   metricLength: HTMLElement | null;
@@ -193,26 +182,9 @@ interface ModernDomRefs extends LiveUiRefs {
   transportModeValue: HTMLElement | null;
   audioMode: HTMLButtonElement | null;
   songStepperButtons: HTMLButtonElement[];
-  octaveButtons: Record<'1' | '2', HTMLButtonElement | null>;
-  samplePreviewToggle: HTMLButtonElement | null;
-  sampleLoadSelected: HTMLButtonElement | null;
-  sampleEditorPreviewToggle: HTMLButtonElement | null;
-  sampleEditorShowSelection: HTMLButtonElement | null;
-  sampleEditorCrop: HTMLButtonElement | null;
-  sampleEditorCut: HTMLButtonElement | null;
-  sampleEditorLoopToggle: HTMLButtonElement | null;
-  sampleEditorVolumeButton: HTMLButtonElement | null;
-  sampleEditorVolumeValue: HTMLElement | null;
-  sampleEditorFineTuneButton: HTMLButtonElement | null;
-  sampleEditorFineTuneValue: HTMLElement | null;
-  sampleEditorLength: HTMLElement | null;
-  sampleEditorVolumeDisplay: HTMLElement | null;
-  sampleEditorFineTuneDisplay: HTMLElement | null;
+  trackMuteButtons: Array<HTMLButtonElement | null>;
+  trackMuteLabels: Array<HTMLElement | null>;
   sampleEditorScroll: HTMLInputElement | null;
-  sampleEditorVisible: HTMLElement | null;
-  sampleEditorLoop: HTMLElement | null;
-  sampleVolumeInputs: HTMLInputElement[];
-  sampleFineTuneInputs: HTMLInputElement[];
 }
 
 const iconMarkup = (iconNode: unknown): string =>
@@ -227,6 +199,7 @@ const iconMarkup = (iconNode: unknown): string =>
 export class TrackerApplication {
   private readonly root: HTMLElement;
   private readonly config: EngineConfig;
+  private readonly runtime: TrackerRuntime;
   private readonly moduleInput: HTMLInputElement;
   private readonly sampleInput: HTMLInputElement;
   private readonly patternCanvas: HTMLCanvasElement;
@@ -250,14 +223,15 @@ export class TrackerApplication {
   private samplePage = 0;
   private lastSelectedSample = 0;
   private pendingSampleImportSlot: number | null = null;
+  private shellHost: HTMLElement | null = null;
   private layoutRefreshFrame: number | null = null;
   private playbackFrame: number | null = null;
+  private playbackTickActive = false;
   private lastPlaybackCoordinatorAt: number | null = null;
   private lastLiveStateVersion = -1;
   private lastAppliedLiveStateVersion = -1;
-  private samplePanelKey: string | null = null;
   private mountedVisualizationMode: VisualizationMode | null = null;
-  private domRefs: ModernDomRefs | null = null;
+  private domRefs: ModernMountRefs | null = null;
   private samplePreviewCache = new Map<number, SampleCacheEntry>();
   private sampleWaveformCache = new Map<number, SampleCacheEntry>();
   private samplePreviewPlaying = false;
@@ -269,7 +243,6 @@ export class TrackerApplication {
   private openSampleEditorPopover: SampleEditorPopoverKey | null = null;
   private sampleEditorNumberEdit: InlineSampleNumberState | null = null;
   private pendingSampleNumberFocus: SampleEditorNumericField | null = null;
-  private suppressNextModernRender = false;
   private sampleCreatorState: SampleCreatorRenderState = {
     midiNote: 48,
     velocity: 1,
@@ -324,6 +297,51 @@ export class TrackerApplication {
   constructor(root: HTMLElement, config: EngineConfig) {
     this.root = root;
     this.config = config;
+    this.runtime = new TrackerRuntime(config, {
+      onTrackerSnapshot: (snapshot, quadrascope) => {
+        const previousPlaying = this.snapshot?.transport.playing ?? false;
+        this.snapshot = snapshot;
+        this.quadrascope = quadrascope ?? this.quadrascope;
+        if (previousPlaying && !snapshot.transport.playing) {
+          this.resetVisualizationState();
+        }
+        this.statusMessage = snapshot.status;
+        this.syncSamplePreviewSession(snapshot);
+        this.syncPlaybackCoordinator();
+
+        const shouldEdit = !snapshot.transport.playing;
+        if (!this.syncingAutoEditMode && this.engine && snapshot.editor.editMode !== shouldEdit) {
+          this.syncingAutoEditMode = true;
+          this.engine.dispatch({ type: 'editor/set-edit-mode', enabled: shouldEdit });
+          this.syncingAutoEditMode = false;
+          return;
+        }
+
+        if (this.viewMode === 'modern' && this.domRefs?.appShell && snapshot.transport.playing) {
+          this.syncModernPlaybackUi(snapshot, 'transport');
+          return;
+        }
+
+        this.lastLiveStateVersion = -1;
+        this.lastAppliedLiveStateVersion = -1;
+        this.render();
+      },
+      onTrackerStatus: (message) => {
+        this.statusMessage = message;
+        this.lastLiveStateVersion = -1;
+        this.lastAppliedLiveStateVersion = -1;
+        this.render();
+      },
+      onSynthSnapshot: (snapshot) => {
+        this.synthSnapshot = snapshot;
+        this.sampleCreatorState.targetSlot = snapshot.targetSampleSlot;
+        this.sampleCreatorState.sampleRate = snapshot.bakeSampleRate;
+
+        if (featureFlags.sample_composer && this.workspaceMode === 'sample-creator') {
+          this.render();
+        }
+      },
+    });
 
     const dom = createTrackerAppDom(
       SAMPLE_PREVIEW_HEIGHT,
@@ -398,76 +416,23 @@ export class TrackerApplication {
   }
 
   async init(): Promise<void> {
-    const { engine, warning } = await createTrackerEngine(this.config);
-    this.engine = engine;
-    const { engine: synthEngine, warning: synthWarning } = await createSynthEngine();
-    this.synthEngine = synthEngine;
-
-    this.engine.subscribe((event) => {
-      if (event.type === 'snapshot') {
-        const previousPlaying = this.snapshot?.transport.playing ?? false;
-        this.snapshot = event.snapshot;
-        this.quadrascope = event.snapshot.quadrascope ?? this.quadrascope;
-        if (previousPlaying && !event.snapshot.transport.playing) {
-          this.resetVisualizationState();
-        }
-        this.statusMessage = event.snapshot.status;
-        this.syncSamplePreviewSession(event.snapshot);
-        this.syncPlaybackCoordinator();
-
-        const shouldEdit = !event.snapshot.transport.playing;
-        if (!this.syncingAutoEditMode && this.engine && event.snapshot.editor.editMode !== shouldEdit) {
-          this.syncingAutoEditMode = true;
-          this.engine.dispatch({ type: 'editor/set-edit-mode', enabled: shouldEdit });
-          this.syncingAutoEditMode = false;
-          return;
-        }
-
-        if (
-          this.viewMode === 'modern'
-          && this.domRefs?.appShell
-          && (event.snapshot.transport.playing || this.suppressNextModernRender)
-        ) {
-          this.suppressNextModernRender = false;
-          this.updateModernLiveRegions(event.snapshot, 'transport');
-          return;
-        }
-      } else {
-        this.statusMessage = event.message;
-      }
-
-      this.lastLiveStateVersion = -1;
-      this.lastAppliedLiveStateVersion = -1;
-      this.render();
-    });
-
-    if (warning) {
-      this.statusMessage = `Fell back to the mock engine: ${warning}`;
+    const initResult = await this.runtime.init();
+    this.engine = this.runtime.getTrackerEngine();
+    this.synthEngine = this.runtime.getSynthEngine();
+    this.snapshot = initResult.snapshot;
+    this.synthSnapshot = initResult.synthSnapshot;
+    this.sampleCreatorState.sampleRate = initResult.synthSnapshot.bakeSampleRate;
+    this.quadrascope = initResult.quadrascope;
+    if (initResult.trackerWarning) {
+      this.statusMessage = `Fell back to the mock engine: ${initResult.trackerWarning}`;
     }
-
-    this.synthEngine.subscribe((event) => {
-      if (event.type === 'snapshot') {
-        this.synthSnapshot = event.snapshot;
-        this.sampleCreatorState.targetSlot = event.snapshot.targetSampleSlot;
-        this.sampleCreatorState.sampleRate = event.snapshot.bakeSampleRate;
-      }
-
-      if (featureFlags.sample_composer && this.workspaceMode === 'sample-creator') {
-        this.render();
-      }
-    });
-
-    this.snapshot = this.engine.getSnapshot();
-    this.synthSnapshot = this.synthEngine.getSnapshot();
-    this.sampleCreatorState.sampleRate = this.synthSnapshot.bakeSampleRate;
-    if (synthWarning && this.synthSnapshot) {
+    if (initResult.synthWarning && this.synthSnapshot) {
       this.synthSnapshot.status = this.synthSnapshot.backend === 'mock'
-        ? `Debug fallback active: ${synthWarning}`
-        : synthWarning;
+        ? `Debug fallback active: ${initResult.synthWarning}`
+        : initResult.synthWarning;
     }
-    this.quadrascope = this.snapshot.quadrascope ?? null;
     this.preferredTransportMode = this.snapshot.transport.mode;
-    if (this.snapshot.editor.editMode !== !this.snapshot.transport.playing) {
+    if (this.engine && this.snapshot.editor.editMode !== !this.snapshot.transport.playing) {
       this.engine.dispatch({ type: 'editor/set-edit-mode', enabled: !this.snapshot.transport.playing });
       this.snapshot = this.engine.getSnapshot();
     }
@@ -486,7 +451,6 @@ export class TrackerApplication {
     this.syncSamplePreviewSession(snapshot);
     const selectedSample = snapshot.samples[snapshot.selectedSample];
     const samplePage = this.resolveSamplePage(snapshot);
-    const sampleButtons = this.renderSampleBank(snapshot, samplePage);
     const sampleBankOptions = this.getSampleBankOptions(snapshot, samplePage);
     const workspaceMode = featureFlags.sample_composer ? this.workspaceMode : 'tracker';
     const sampleEditorOpen = snapshot.sampleEditor.open;
@@ -494,104 +458,52 @@ export class TrackerApplication {
       this.openSampleEditorPopover = null;
       this.sampleEditorNumberEdit = null;
     }
-    const shell = document.createElement('div');
+    const shell = this.ensureShellHost();
     shell.className = `app-shell app-shell--${this.viewMode}`;
     document.body.dataset.viewMode = this.viewMode;
-    const moduleGridOptions = this.getModuleGridOptions(snapshot);
-    const moduleCardsHtml = moduleGridOptions.cards
-      .map((card) => card.kind === 'stepper'
-        ? this.renderModuleStepperCard(card.label, card.value, card.role, card.downAction, card.upAction, card.enabled, card.downIconHtml, card.upIconHtml)
-        : this.renderModuleValueCard(card.label, card.value, card.role))
-      .join('');
-    const viewToggleOptions = this.getViewToggleOptions();
-    const viewToggleHtml = viewToggleOptions
-      .map((button) => this.renderToolbarButton(button.action, button.iconHtml, button.label, button.active))
-      .join('');
-    const playbackMode = snapshot.transport.playing ? snapshot.transport.mode : this.preferredTransportMode;
-    const moduleTransportOptions = this.getModuleTransportOptions(snapshot, playbackMode);
-    const visualizationControlOptions = this.getVisualizationControlOptions();
-    const samplePageControlOptions = this.getSamplePageControlOptions(snapshot, samplePage);
-    const transportControlsHtml = moduleTransportOptions
-      .map((button) => this.renderToolIconButton(button.action, button.iconHtml, button.label, button.active, button.disabled, button.role ?? '', button.valueText ?? ''))
-      .join('');
-    const trackHeadersHtml = [
-      this.renderTrackHeader(0, snapshot),
-      this.renderTrackHeader(1, snapshot),
-      this.renderTrackHeader(2, snapshot),
-      this.renderTrackHeader(3, snapshot),
-    ].join('');
     const sampleEditorPanelOptions = sampleEditorOpen
       ? this.getSampleEditorPanelOptions(snapshot)
       : null;
-    const patternEditorPanelOptions: PatternPanelRenderOptions | null = sampleEditorOpen
-      ? null
-      : {
-        octave: this.keyboardOctave,
-        octaveOneActive: this.keyboardOctave === 1,
-        octaveTwoActive: this.keyboardOctave === 2,
-        collapsed: this.collapsedSections.editor,
-        collapseIconHtml: this.getSectionCollapseIcon('editor'),
-        trackHeadersHtml,
-      };
-    const editorPanelHtml = sampleEditorOpen
-      ? ''
-      : '';
     const selectedSamplePanelOptions = this.getSelectedSamplePanelOptions(selectedSample, snapshot);
 
-    renderAppShellView(shell, {
+    renderAppShellView(shell, buildTrackerShellViewState({
       viewMode: this.viewMode,
       workspaceMode,
-      viewToggleHtml,
-      viewToggleOptions,
-      songTitleHtml: this.renderSongTitleHtml(snapshot),
-      transportControlsHtml,
-      moduleTransportOptions,
-      moduleCardsHtml,
-      moduleGridOptions,
-      moduleCollapsed: this.collapsedSections.module,
-      moduleCollapseIconHtml: this.getSectionCollapseIcon('module'),
-      visualizationLabel: escapeHtml(getVisualizationLabel(this.visualizationMode)),
-      visualizationPianoIconHtml: iconMarkup(Piano),
-      visualizationPrevIconHtml: iconMarkup(ChevronLeft),
-      visualizationNextIconHtml: iconMarkup(ChevronRight),
-      visualizationControlOptions,
-      visualizationCollapsed: this.collapsedSections.visualization,
-      visualizationCollapseIconHtml: this.getSectionCollapseIcon('visualization'),
-      editorPanelHtml,
-      patternEditorPanelOptions,
-      sampleEditorPanelOptions,
-      sampleButtonsHtml: sampleButtons,
-      sampleBankOptions,
-      selectedSamplePanelHtml: '',
-      selectedSamplePanelOptions,
-      samplesCollapsed: this.collapsedSections.samples,
-      samplesCollapseIconHtml: this.getSectionCollapseIcon('samples'),
-      classicDebugHtml: this.renderClassicDebug(),
-      samplePagePrevDisabled: samplePage <= 0,
-      samplePageNextDisabled: samplePage >= this.getSamplePageCount(snapshot) - 1,
-      samplePagePrevIconHtml: iconMarkup(ChevronLeft),
-      samplePageNextIconHtml: iconMarkup(ChevronRight),
-      samplePageControlOptions,
-      fileMenuOpen: this.openMenu === 'file',
-      helpMenuOpen: this.openMenu === 'help',
+      snapshot,
+      keyboardOctave: this.keyboardOctave,
+      visualizationMode: this.visualizationMode,
+      preferredTransportMode: this.preferredTransportMode,
+      samplePage,
+      samplePageCount: this.getSamplePageCount(snapshot),
+      sampleEditorOpen,
+      collapsedSections: this.collapsedSections,
+      openMenu: this.openMenu,
       aboutOpen: this.aboutOpen,
+      songTitle: this.getSongTitleOptions(snapshot),
+      sampleEditorPanelOptions,
+      sampleBankOptions,
+      selectedSamplePanelOptions,
+      classicDebugOptions: this.getClassicDebugOptions(),
       appVersion: __APP_VERSION__,
       fileActionsDisabled: snapshot.transport.playing,
       importDisabled: !this.canEditSnapshot(snapshot),
-      sampleCreatorHtml: workspaceMode === 'sample-creator' ? this.renderSampleCreatorWorkspace(snapshot) : '',
-    });
+      sampleCreatorOptions: workspaceMode === 'sample-creator' ? this.getSampleCreatorOptions(snapshot) : null,
+      canEditSnapshot: (nextSnapshot) => this.canEditSnapshot(nextSnapshot),
+      getSectionCollapseIcon: (section) => this.getSectionCollapseIcon(section),
+      renderIcon: (iconNode) => iconMarkup(iconNode),
+    }));
 
-    this.root.querySelector('.app-shell')?.remove();
-    this.root.prepend(shell);
-    this.collectModernDomRefs(shell);
+    this.syncModernMountRefs(shell);
 
-    const canvasHost = this.domRefs?.appShell?.querySelector<HTMLElement>('.engine-canvas-host') ?? null;
+    const canvasHost = shell.querySelector<HTMLElement>('.engine-canvas-host');
     if (canvasHost) {
       this.config.canvas.className = this.viewMode === 'classic'
         ? 'engine-canvas engine-canvas-classic'
         : 'engine-canvas';
-      canvasHost.replaceChildren(this.config.canvas);
-      this.scheduleLayoutRefresh();
+      if (this.config.canvas.parentElement !== canvasHost) {
+        canvasHost.replaceChildren(this.config.canvas);
+        this.scheduleLayoutRefresh();
+      }
       if (this.viewMode === 'classic') {
         window.requestAnimationFrame(() => this.config.canvas.focus());
       }
@@ -599,7 +511,9 @@ export class TrackerApplication {
 
     const patternHost = this.domRefs?.patternHost ?? null;
     if (patternHost) {
-      patternHost.replaceChildren(this.patternCanvas);
+      if (this.patternCanvas.parentElement !== patternHost) {
+        patternHost.replaceChildren(this.patternCanvas);
+      }
       this.drawPatternCanvas(snapshot);
     }
 
@@ -607,14 +521,20 @@ export class TrackerApplication {
     this.mountVisualization(snapshot);
 
     if (samplePreviewHost) {
-      samplePreviewHost.replaceChildren(this.samplePreviewCanvas);
+      if (this.samplePreviewCanvas.parentElement !== samplePreviewHost) {
+        samplePreviewHost.replaceChildren(this.samplePreviewCanvas);
+      }
       this.drawSelectedSamplePreview(snapshot);
     }
 
     const sampleEditorHost = this.domRefs?.sampleEditorHost ?? null;
     if (sampleEditorHost) {
-      sampleEditorHost.replaceChildren(this.sampleEditorCanvas);
+      if (this.sampleEditorCanvas.parentElement !== sampleEditorHost) {
+        sampleEditorHost.replaceChildren(this.sampleEditorCanvas);
+      }
       this.drawSampleEditor(snapshot);
+      const view = this.getSampleEditorView(snapshot);
+      this.updateSampleEditorScrollbarThumb(snapshot.sampleEditor.sampleLength, view.length);
     }
 
     this.syncRenameFocus(shell);
@@ -625,7 +545,18 @@ export class TrackerApplication {
     this.syncPlaybackCoordinator();
   }
 
-  private collectModernDomRefs(shell: HTMLElement): void {
+  private ensureShellHost(): HTMLElement {
+    if (this.shellHost && this.shellHost.isConnected) {
+      return this.shellHost;
+    }
+
+    const shell = document.createElement('div');
+    this.shellHost = shell;
+    this.root.prepend(shell);
+    return shell;
+  }
+
+  private syncModernMountRefs(shell: HTMLElement): void {
     const selectActionButton = (action: string): HTMLButtonElement | null =>
       shell.querySelector<HTMLButtonElement>(`[data-action="${action}"]`);
     const selectRole = <T extends HTMLElement>(role: string): T | null =>
@@ -639,7 +570,6 @@ export class TrackerApplication {
       visualizationHost: selectRole<HTMLElement>('visualization-host'),
       samplePreviewHost: shell.querySelector<HTMLElement>('[data-role="sample-preview-host"]'),
       sampleEditorHost: shell.querySelector<HTMLElement>('[data-role="sample-editor-host"]'),
-      songTitle: selectRole<HTMLElement>('song-title'),
       metricPosition: selectRole<HTMLElement>('metric-position'),
       metricPattern: selectRole<HTMLElement>('metric-pattern'),
       metricLength: selectRole<HTMLElement>('metric-length'),
@@ -648,15 +578,6 @@ export class TrackerApplication {
       metricSize: selectRole<HTMLElement>('metric-size'),
       octaveValue: selectRole<HTMLElement>('octave-value'),
       visualizationLabel: selectRole<HTMLElement>('visualization-label'),
-      samplePageLabel: selectRole<HTMLElement>('sample-page-label'),
-      samplePagePrevButton: selectActionButton('sample-page-prev'),
-      samplePageNextButton: selectActionButton('sample-page-next'),
-      sampleBank: selectRole<HTMLElement>('sample-bank'),
-      sampleDetailContent: selectRole<HTMLElement>('sample-detail-content'),
-      selectedSampleTitle: selectRole<HTMLElement>('selected-sample-title'),
-      selectedSampleHint: selectRole<HTMLElement>('selected-sample-hint'),
-      trackMuteButtons,
-      trackMuteLabels: trackMuteButtons.map((button) => button?.closest('.track-label') as HTMLElement | null),
       transportToggle: selectRole<HTMLButtonElement>('module-transport-toggle'),
       transportMode: selectRole<HTMLButtonElement>('module-transport-mode'),
       transportModeValue: shell.querySelector<HTMLElement>('[data-role="module-transport-mode"] .tool-icon-button__value'),
@@ -674,29 +595,9 @@ export class TrackerApplication {
         const button = selectActionButton(action);
         return button ? [button] : [];
       }),
-      octaveButtons: {
-        '1': selectActionButton('octave-set-1'),
-        '2': selectActionButton('octave-set-2'),
-      },
-      samplePreviewToggle: selectRole<HTMLButtonElement>('sample-preview-toggle'),
-      sampleLoadSelected: selectActionButton('sample-load-selected'),
-      sampleEditorPreviewToggle: selectRole<HTMLButtonElement>('sample-editor-preview-toggle'),
-      sampleEditorShowSelection: selectActionButton('sample-editor-show-selection'),
-      sampleEditorCrop: selectActionButton('sample-editor-crop'),
-      sampleEditorCut: selectActionButton('sample-editor-cut'),
-      sampleEditorLoopToggle: selectActionButton('sample-editor-toggle-loop'),
-      sampleEditorVolumeButton: selectActionButton('sample-editor-open-volume'),
-      sampleEditorVolumeValue: shell.querySelector<HTMLElement>('[data-action="sample-editor-open-volume"] .tool-icon-button__value'),
-      sampleEditorFineTuneButton: selectActionButton('sample-editor-open-finetune'),
-      sampleEditorFineTuneValue: shell.querySelector<HTMLElement>('[data-action="sample-editor-open-finetune"] .tool-icon-button__value'),
-      sampleEditorLength: selectRole<HTMLElement>('sample-editor-length'),
-      sampleEditorVolumeDisplay: selectRole<HTMLElement>('sample-editor-volume-display'),
-      sampleEditorFineTuneDisplay: selectRole<HTMLElement>('sample-editor-finetune-display'),
+      trackMuteButtons,
+      trackMuteLabels: trackMuteButtons.map((button) => button?.closest('.track-label') as HTMLElement | null),
       sampleEditorScroll: shell.querySelector<HTMLInputElement>('[data-input="sample-editor-scroll"]'),
-      sampleEditorVisible: selectRole<HTMLElement>('sample-editor-visible'),
-      sampleEditorLoop: selectRole<HTMLElement>('sample-editor-loop'),
-      sampleVolumeInputs: Array.from(shell.querySelectorAll<HTMLInputElement>('[data-input="sample-volume"]')),
-      sampleFineTuneInputs: Array.from(shell.querySelectorAll<HTMLInputElement>('[data-input="sample-finetune"]')),
     };
   }
 
@@ -704,42 +605,6 @@ export class TrackerApplication {
     if (element && element.textContent !== value) {
       element.textContent = value;
     }
-  }
-
-  private setElementHtml(element: HTMLElement | null, value: string): void {
-    if (element && element.innerHTML !== value) {
-      element.innerHTML = value;
-    }
-  }
-
-  private syncInputNodeValues(inputs: HTMLInputElement[], value: string): void {
-    for (const input of inputs) {
-      if (input.value !== value) {
-        input.value = value;
-      }
-    }
-  }
-
-  private renderToolbarButton(action: string, iconNode: unknown, label: string, active = false): string {
-    if (typeof iconNode === 'string') {
-      return renderModernToolbarButton(action, iconNode, label, active);
-    }
-    return renderModernToolbarButton(action, iconMarkup(iconNode), label, active);
-  }
-
-  private renderToolIconButton(
-    action: string,
-    iconNode: unknown,
-    label: string,
-    active = false,
-    disabled = false,
-    role = '',
-    valueText = '',
-  ): string {
-    if (typeof iconNode === 'string') {
-      return renderModernToolIconButton(action, iconNode, label, active, disabled, role, valueText);
-    }
-    return renderModernToolIconButton(action, iconMarkup(iconNode), label, active, disabled, role, valueText);
   }
 
   private canEditSnapshot(snapshot: TrackerSnapshot | null): boolean {
@@ -808,20 +673,26 @@ export class TrackerApplication {
     return this.getSelectedSampleHeading(snapshot.samples[snapshot.selectedSample]);
   }
 
-  private renderSongTitleHtml(snapshot: TrackerSnapshot): string {
-    if (this.renameState?.kind === 'song') {
-      return `<input class="inline-rename-input" data-inline-rename="song" maxlength="20" value="${escapeHtml(this.renameState.value)}" />`;
-    }
-
-    return `<button type="button" class="inline-name-display" data-rename-target="song">${escapeHtml(this.getDisplaySongTitle(snapshot))}</button>`;
+  private getSongTitleOptions(snapshot: TrackerSnapshot): InlineNameFieldRenderOptions {
+    return {
+      target: 'song',
+      editing: this.renameState?.kind === 'song',
+      value: this.renameState?.kind === 'song' ? this.renameState.value : snapshot.song.title,
+      displayValue: this.getDisplaySongTitle(snapshot),
+      maxLength: 20,
+    };
   }
 
-  private renderSampleTitleHtml(snapshot: TrackerSnapshot): string {
-    if (this.renameState?.kind === 'sample') {
-      return `<input class="inline-rename-input" data-inline-rename="sample" maxlength="22" value="${escapeHtml(this.renameState.value)}" />`;
-    }
-
-    return `<button type="button" class="inline-name-display" data-rename-target="sample">${escapeHtml(this.getDisplaySampleTitle(snapshot))}</button>`;
+  private getSampleTitleOptions(snapshot: TrackerSnapshot): InlineNameFieldRenderOptions {
+    return {
+      target: 'sample',
+      editing: this.renameState?.kind === 'sample',
+      value: this.renameState?.kind === 'sample'
+        ? this.renameState.value
+        : (snapshot.samples[snapshot.selectedSample]?.name ?? ''),
+      displayValue: this.getDisplaySampleTitle(snapshot),
+      maxLength: 22,
+    };
   }
 
   private startInlineRename(kind: InlineRenameState['kind']): void {
@@ -960,7 +831,7 @@ export class TrackerApplication {
     this.samplePreviewPlaying = false;
     this.syncPlaybackCoordinator();
     if (redraw && wasPlaying && this.snapshot && this.viewMode === 'modern') {
-      this.updateModernLiveRegions(this.snapshot, 'sample-preview');
+      this.render();
     }
   }
 
@@ -1075,7 +946,6 @@ export class TrackerApplication {
     const { field, value } = this.sampleEditorNumberEdit;
     const numeric = Number(value);
     if (Number.isFinite(numeric)) {
-      this.suppressNextModernRender = true;
       this.engine.dispatch({
         type: 'sample/update',
         sample: this.snapshot.selectedSample,
@@ -1083,198 +953,12 @@ export class TrackerApplication {
           ? { volume: clamp(Math.round(numeric), 0, 64) }
           : { fineTune: clamp(Math.round(numeric), -8, 7) },
       });
-      this.updateModernLiveRegions(this.snapshot);
+      this.snapshot = this.engine.getSnapshot();
     }
 
     this.sampleEditorNumberEdit = null;
     this.pendingSampleNumberFocus = null;
     this.render();
-  }
-
-  private renderModuleStepperCard(
-    label: string,
-    value: string,
-    role: string,
-    downAction: string,
-    upAction: string,
-    enabled: boolean,
-    downIconHtml = iconMarkup(ChevronDown),
-    upIconHtml = iconMarkup(ChevronUp),
-  ): string {
-    return renderModernModuleStepperCard(label, value, role, downAction, upAction, enabled, downIconHtml, upIconHtml);
-  }
-
-  private renderModuleValueCard(label: string, value: string, role: string): string {
-    return renderModernModuleValueCard(label, value, role);
-  }
-
-  private getViewToggleOptions(): ToolbarButtonRenderOptions[] {
-    return [
-      {
-        action: 'view-modern',
-        iconHtml: iconMarkup(Monitor),
-        label: 'Modern',
-        active: this.viewMode === 'modern',
-      },
-      {
-        action: 'view-classic',
-        iconHtml: iconMarkup(View),
-        label: 'Classic',
-        active: this.viewMode === 'classic',
-      },
-    ];
-  }
-
-  private getModuleTransportOptions(
-    snapshot: TrackerSnapshot,
-    playbackMode: TransportMode,
-  ): ToolIconButtonRenderOptions[] {
-    return [
-      {
-        action: 'transport-toggle-mode',
-        iconHtml: iconMarkup(ArrowLeftRight),
-        label: playbackMode === 'pattern' ? 'Pattern playback' : 'Module playback',
-        active: playbackMode === 'pattern',
-        disabled: false,
-        role: 'module-transport-mode',
-        valueText: playbackMode === 'pattern' ? 'P' : 'M',
-      },
-      {
-        action: 'transport-toggle',
-        iconHtml: iconMarkup(snapshot.transport.playing ? Pause : Play),
-        label: snapshot.transport.playing ? 'Pause playback' : (playbackMode === 'pattern' ? 'Play pattern' : 'Play module'),
-        active: snapshot.transport.playing,
-        disabled: false,
-        role: 'module-transport-toggle',
-      },
-      {
-        action: 'transport-stop',
-        iconHtml: iconMarkup(Square),
-        label: 'Stop',
-        active: false,
-        disabled: false,
-        role: 'module-transport-stop',
-      },
-      {
-        action: 'audio-cycle-mode',
-        iconHtml: iconMarkup(Volume2),
-        label: this.getAudioModeLabel(snapshot),
-        active: snapshot.audio.mode !== 'custom',
-        disabled: false,
-        role: 'module-audio-mode',
-        valueText: this.getAudioModeValue(snapshot),
-      },
-    ];
-  }
-
-  private getModuleGridOptions(snapshot: TrackerSnapshot): { cards: ModuleCardRenderOptions[] } {
-    const editable = this.canEditSnapshot(snapshot);
-    return {
-      cards: [
-        {
-          kind: 'stepper',
-          label: 'Position',
-          value: String(snapshot.transport.position).padStart(2, '0'),
-          role: 'position',
-          downAction: 'song-position-down',
-          upAction: 'song-position-up',
-          enabled: editable,
-          downIconHtml: iconMarkup(ChevronDown),
-          upIconHtml: iconMarkup(ChevronUp),
-        },
-        {
-          kind: 'stepper',
-          label: 'Pattern',
-          value: String(snapshot.pattern.index).padStart(2, '0'),
-          role: 'pattern',
-          downAction: 'song-pattern-down',
-          upAction: 'song-pattern-up',
-          enabled: editable,
-          downIconHtml: iconMarkup(ChevronDown),
-          upIconHtml: iconMarkup(ChevronUp),
-        },
-        {
-          kind: 'stepper',
-          label: 'Length',
-          value: String(snapshot.song.length).padStart(2, '0'),
-          role: 'length',
-          downAction: 'song-length-down',
-          upAction: 'song-length-up',
-          enabled: editable,
-          downIconHtml: iconMarkup(ChevronDown),
-          upIconHtml: iconMarkup(ChevronUp),
-        },
-        {
-          kind: 'stepper',
-          label: 'BPM',
-          value: String(snapshot.transport.bpm),
-          role: 'bpm',
-          downAction: 'song-bpm-down',
-          upAction: 'song-bpm-up',
-          enabled: editable,
-          downIconHtml: iconMarkup(ChevronDown),
-          upIconHtml: iconMarkup(ChevronUp),
-        },
-        {
-          kind: 'value',
-          label: 'Time',
-          value: formatSongTime(snapshot),
-          role: 'time',
-        },
-        {
-          kind: 'value',
-          label: 'Size',
-          value: `${snapshot.song.sizeBytes} bytes`,
-          role: 'size',
-        },
-      ],
-    };
-  }
-
-  private getVisualizationControlOptions(): IconButtonRenderOptions[] {
-    return [
-      {
-        action: 'visualization-piano',
-        iconHtml: iconMarkup(Piano),
-        label: 'Show piano visualization',
-      },
-      {
-        action: 'visualization-prev',
-        iconHtml: iconMarkup(ChevronLeft),
-        label: 'Previous visualization',
-      },
-      {
-        action: 'visualization-next',
-        iconHtml: iconMarkup(ChevronRight),
-        label: 'Next visualization',
-      },
-    ];
-  }
-
-  private getSamplePageControlOptions(
-    snapshot: TrackerSnapshot,
-    samplePage: number,
-  ): IconButtonRenderOptions[] {
-    const pageCount = this.getSamplePageCount(snapshot);
-    return [
-      {
-        action: 'sample-page-prev',
-        iconHtml: iconMarkup(ChevronLeft),
-        label: 'Previous sample page',
-        disabled: samplePage <= 0,
-      },
-      {
-        action: 'sample-page-next',
-        iconHtml: iconMarkup(ChevronRight),
-        label: 'Next sample page',
-        disabled: samplePage >= pageCount - 1,
-      },
-    ];
-  }
-
-  private renderTrackHeader(channel: number, snapshot: TrackerSnapshot): string {
-    const muted = snapshot.editor.muted[channel] ?? false;
-    return renderModernTrackHeader(channel, muted, iconMarkup(muted ? VolumeX : Volume2));
   }
 
   private mountVisualization(snapshot: TrackerSnapshot): void {
@@ -1380,6 +1064,7 @@ export class TrackerApplication {
       this.playbackFrame = null;
     }
 
+    this.playbackTickActive = false;
     this.lastPlaybackCoordinatorAt = null;
   }
 
@@ -1425,6 +1110,85 @@ export class TrackerApplication {
         this.drawVisualization(snapshot);
         break;
     }
+  }
+
+  private syncModernPlaybackUi(snapshot: TrackerSnapshot, reason: ModernRedrawReason = 'transport'): void {
+    if (this.viewMode !== 'modern' || !this.domRefs) {
+      return;
+    }
+
+    const refs = this.domRefs;
+    const liveLabels = buildTrackerShellLiveLabels(snapshot, this.keyboardOctave, this.visualizationMode);
+    this.setElementText(refs.metricPosition, liveLabels.position);
+    this.setElementText(refs.metricPattern, liveLabels.pattern);
+    this.setElementText(refs.metricLength, liveLabels.length);
+    this.setElementText(refs.metricBpm, liveLabels.bpm);
+    this.setElementText(refs.metricTime, liveLabels.time);
+    this.setElementText(refs.metricSize, liveLabels.size);
+    this.setElementText(refs.octaveValue, liveLabels.octave);
+    this.setElementText(refs.visualizationLabel, liveLabels.visualization);
+
+    const playbackMode = snapshot.transport.playing ? snapshot.transport.mode : this.preferredTransportMode;
+    const moduleTransportOptions = buildTrackerModuleTransportOptions(
+      snapshot,
+      playbackMode,
+      (nextSnapshot) => this.getAudioModeLabel(nextSnapshot),
+      (nextSnapshot) => this.getAudioModeValue(nextSnapshot),
+      (iconNode) => iconMarkup(iconNode),
+    );
+    const transportModeOption = moduleTransportOptions.find((option) => option.role === 'module-transport-mode') ?? null;
+    const transportToggleOption = moduleTransportOptions.find((option) => option.role === 'module-transport-toggle') ?? null;
+    const audioModeOption = moduleTransportOptions.find((option) => option.role === 'module-audio-mode') ?? null;
+
+    if (refs.transportToggle && transportToggleOption) {
+      const label = transportToggleOption.label;
+      refs.transportToggle.disabled = transportToggleOption.disabled;
+      refs.transportToggle.classList.toggle('is-active', transportToggleOption.active);
+      refs.transportToggle.dataset.action = transportToggleOption.action;
+      const nextToggleState = `${snapshot.transport.playing}:${playbackMode}`;
+      if (refs.transportToggle.dataset.toggleState !== nextToggleState) {
+        refs.transportToggle.dataset.toggleState = nextToggleState;
+        refs.transportToggle.innerHTML = `${transportToggleOption.iconHtml}<span class="sr-only">${label}</span>`;
+      }
+    }
+
+    if (refs.transportMode && transportModeOption) {
+      refs.transportMode.classList.toggle('is-active', transportModeOption.active);
+      if (refs.transportModeValue) {
+        refs.transportModeValue.textContent = transportModeOption.valueText ?? '';
+      }
+    }
+
+    if (refs.audioMode && audioModeOption) {
+      const label = audioModeOption.label;
+      refs.audioMode.classList.toggle('is-active', audioModeOption.active);
+      const nextAudioState = snapshot.audio.mode;
+      if (refs.audioMode.dataset.audioState !== nextAudioState) {
+        refs.audioMode.dataset.audioState = nextAudioState;
+        refs.audioMode.innerHTML = `${audioModeOption.iconHtml}<span class="tool-icon-button__value" aria-hidden="true">${audioModeOption.valueText ?? ''}</span><span class="sr-only">${label}</span>`;
+      }
+    }
+
+    const canEdit = this.canEditSnapshot(snapshot);
+    for (const button of refs.songStepperButtons) {
+      button.disabled = !canEdit;
+    }
+
+    for (let channel = 0; channel < 4; channel += 1) {
+      const muted = snapshot.editor.muted[channel] ?? false;
+      const button = refs.trackMuteButtons[channel] ?? null;
+      if (button) {
+        button.classList.toggle('is-muted', muted);
+        button.setAttribute('aria-pressed', muted ? 'true' : 'false');
+        if (button.dataset.mutedState !== String(muted)) {
+          button.dataset.mutedState = String(muted);
+          button.innerHTML = iconMarkup(muted ? VolumeX : Volume2);
+        }
+      }
+      refs.trackMuteLabels[channel]?.classList.toggle('is-muted', muted);
+    }
+
+    this.redrawModernCanvases(snapshot, reason);
   }
 
   private applyLiveState(liveState: TrackerLiveState): boolean {
@@ -1642,28 +1406,31 @@ export class TrackerApplication {
   }
 
   private ensurePlaybackCoordinator(): void {
-    if (this.playbackFrame !== null || !this.hasPlaybackActivity()) {
+    if (this.playbackFrame !== null || this.playbackTickActive || !this.hasPlaybackActivity()) {
       return;
     }
 
     const tick = (now: number): void => {
+      this.playbackTickActive = true;
       this.playbackFrame = null;
       if (!this.snapshot || !this.engine) {
+        this.playbackTickActive = false;
         this.stopPlaybackCoordinator();
         return;
       }
 
       this.syncSamplePreviewSession(this.snapshot);
       if (!this.hasPlaybackActivity()) {
+        this.playbackTickActive = false;
         this.stopPlaybackCoordinator();
         return;
       }
 
-      const liveCadenceMs = this.viewMode === 'classic' ? 50 : 0;
+      const liveCadenceMs = 50;
       const shouldSyncLiveState = this.snapshot.transport.playing;
       if (
         shouldSyncLiveState
-        && (liveCadenceMs === 0 || this.lastPlaybackCoordinatorAt === null || now - this.lastPlaybackCoordinatorAt >= liveCadenceMs)
+        && (this.lastPlaybackCoordinatorAt === null || now - this.lastPlaybackCoordinatorAt >= liveCadenceMs)
       ) {
         this.lastPlaybackCoordinatorAt = now;
         const liveState = this.engine.getLiveState();
@@ -1674,10 +1441,10 @@ export class TrackerApplication {
             this.snapshot = this.engine.getSnapshot();
             this.lastAppliedLiveStateVersion = liveState.version;
             if (this.viewMode === 'modern') {
-              this.updateModernLiveRegions(this.snapshot, 'transport');
+              this.syncModernPlaybackUi(this.snapshot, 'transport');
             }
           } else if (this.applyLiveState(liveState) && this.viewMode === 'modern') {
-            this.updateModernLiveRegions(this.snapshot, 'transport');
+            this.syncModernPlaybackUi(this.snapshot, 'transport');
           }
         }
       }
@@ -1696,8 +1463,10 @@ export class TrackerApplication {
       }
 
       if (this.hasPlaybackActivity()) {
+        this.playbackTickActive = false;
         this.playbackFrame = window.requestAnimationFrame(tick);
       } else {
+        this.playbackTickActive = false;
         this.stopPlaybackCoordinator();
       }
     };
@@ -1898,30 +1667,13 @@ export class TrackerApplication {
     return page;
   }
 
-  private getSamplePanelKey(snapshot: TrackerSnapshot, samplePage: number): string {
-    return getModernSamplePanelKey(snapshot, samplePage, SAMPLE_PAGE_SIZE);
-  }
-
   private getSampleBankOptions(snapshot: TrackerSnapshot, samplePage: number): SampleBankRenderOptions {
-    const start = samplePage * SAMPLE_PAGE_SIZE;
-    return {
-      items: snapshot.samples
-        .slice(start, start + SAMPLE_PAGE_SIZE)
-        .map((sample) => ({
-          sample,
-          selectedSample: snapshot.selectedSample,
-          previewValues: this.getPreviewSource(sample),
-        })),
-    };
-  }
-
-  private renderSampleBank(snapshot: TrackerSnapshot, samplePage: number): string {
-    return renderModernSampleBank(
+    return buildTrackerSampleBankOptions({
       snapshot,
       samplePage,
-      SAMPLE_PAGE_SIZE,
-      (sample) => this.getPreviewSource(sample),
-    );
+      pageSize: SAMPLE_PAGE_SIZE,
+      getPreviewValues: (sample) => this.getPreviewSource(sample),
+    });
   }
 
   private getSampleEditorZoomAnchor(): number {
@@ -1937,87 +1689,61 @@ export class TrackerApplication {
     return Math.round(view.start + (view.length / 2));
   }
 
-  private renderSelectedSamplePanel(sample: SampleSlot, snapshot: TrackerSnapshot): string {
-    return renderModernSelectedSamplePanel(this.getSelectedSamplePanelOptions(sample, snapshot));
-  }
-
   private getSelectedSamplePanelOptions(
     sample: SampleSlot,
     snapshot: TrackerSnapshot,
   ): SelectedSamplePanelRenderOptions {
-    return {
+    return buildTrackerSelectedSamplePanelOptions({
       sample,
+      snapshot,
       editable: this.canEditSnapshot(snapshot),
       samplePreviewPlaying: this.samplePreviewPlaying,
-      sampleTitleHtml: this.renderSampleTitleHtml(snapshot),
-      playIconHtml: iconMarkup(Play),
-      stopIconHtml: iconMarkup(Square),
-      editIconHtml: iconMarkup(PencilLine),
-      replaceIconHtml: iconMarkup(FileUp),
-      createIconHtml: iconMarkup(Piano),
-    };
+      sampleTitle: this.getSampleTitleOptions(snapshot),
+      renderIcon: (iconNode) => iconMarkup(iconNode),
+    });
   }
 
-  private renderSampleCreatorWorkspace(snapshot: TrackerSnapshot): string {
+  private getSampleCreatorOptions(snapshot: TrackerSnapshot): SampleCreatorRenderOptions | null {
     if (!featureFlags.sample_composer) {
-      return '';
+      return null;
     }
 
     const synthSnapshot = this.synthSnapshot;
-    if (!synthSnapshot) {
-      return `
-        <section class="sample-creator-workspace">
-          <div class="sample-creator-card">
-            <p class="panel-label">Sample Creator</p>
-            <h2 class="panel-title">Initializing synth engine...</h2>
-          </div>
-        </section>
-      `;
-    }
+    const targetSample = synthSnapshot
+      ? (snapshot.samples[synthSnapshot.targetSampleSlot] ?? snapshot.samples[snapshot.selectedSample])
+      : null;
 
-    const targetSample = snapshot.samples[synthSnapshot.targetSampleSlot] ?? snapshot.samples[snapshot.selectedSample];
-    return renderModernSampleCreatorWorkspace({
+    return {
       snapshot: synthSnapshot,
       targetSample,
       keyboardOctave: this.keyboardOctave,
       renderJob: this.sampleCreatorState,
-    });
-  }
-
-  private renderSampleEditorPanel(snapshot: TrackerSnapshot): string {
-    return renderModernSampleEditorPanel(this.getSampleEditorPanelOptions(snapshot));
+    };
   }
 
   private getSampleEditorPanelOptions(snapshot: TrackerSnapshot): SampleEditorPanelRenderOptions {
-    return {
+    return buildTrackerSampleEditorPanelOptions({
       snapshot,
       editable: this.canEditSnapshot(snapshot),
       samplePreviewPlaying: this.samplePreviewPlaying,
       collapsed: this.collapsedSections.editor,
       collapseIconHtml: this.getSectionCollapseIcon('editor'),
-      selectedSampleTitleHtml: this.renderSampleTitleHtml(snapshot),
+      selectedSampleTitle: this.getSampleTitleOptions(snapshot),
       view: this.getSampleEditorView(snapshot),
-      showAllIconHtml: iconMarkup(ArrowLeftRight),
-      showSelectionIconHtml: iconMarkup(Focus),
-      playIconHtml: iconMarkup(Play),
-      stopIconHtml: iconMarkup(Square),
-      loopIconHtml: iconMarkup(Repeat),
-      volumeIconHtml: iconMarkup(SlidersHorizontal),
-      fineTuneIconHtml: iconMarkup(ArrowUpDown),
-      cropIconHtml: iconMarkup(Crop),
-      cutIconHtml: iconMarkup(Scissors),
-      backIconHtml: iconMarkup(ArrowLeft),
       volumePopoverOpen: this.openSampleEditorPopover === 'volume',
       fineTunePopoverOpen: this.openSampleEditorPopover === 'fineTune',
       volumeEditOpen: this.sampleEditorNumberEdit?.field === 'volume',
       fineTuneEditOpen: this.sampleEditorNumberEdit?.field === 'fineTune',
       volumeEditValue: this.sampleEditorNumberEdit?.field === 'volume' ? this.sampleEditorNumberEdit.value : String(snapshot.samples[snapshot.selectedSample].volume),
       fineTuneEditValue: this.sampleEditorNumberEdit?.field === 'fineTune' ? this.sampleEditorNumberEdit.value : String(snapshot.samples[snapshot.selectedSample].fineTune),
-    };
+      renderIcon: (iconNode) => iconMarkup(iconNode),
+    });
   }
 
-  private renderClassicDebug(): string {
-    return renderModernClassicDebug(this.viewMode === 'classic' && SHOW_CLASSIC_DEBUG);
+  private getClassicDebugOptions(): ClassicDebugRenderOptions {
+    return {
+      enabled: this.viewMode === 'classic' && SHOW_CLASSIC_DEBUG,
+    };
   }
 
   private async handleClick(event: Event): Promise<void> {
@@ -2176,11 +1902,10 @@ export class TrackerApplication {
         setSampleEditorViewOverride: (value) => { this.sampleEditorViewOverride = value; },
         setSamplePage: (value) => { this.samplePage = value; },
         setSamplePreviewPlaying: (value) => { this.samplePreviewPlaying = value; },
-        setSnapshot: (snapshot) => { this.snapshot = snapshot; },
-        setViewMode: (mode) => { this.viewMode = mode; },
+      setSnapshot: (snapshot) => { this.snapshot = snapshot; },
+      setViewMode: (mode) => { this.viewMode = mode; },
       setVisualizationMode: (mode) => { this.visualizationMode = mode; },
-        shiftVisualization: (direction) => this.shiftVisualization(direction),
-        updateModernLiveRegions: (snapshot) => this.updateModernLiveRegions(snapshot),
+      shiftVisualization: (direction) => this.shiftVisualization(direction),
       });
     if (this.synthEngine && this.snapshot) {
       this.sampleCreatorState.targetSlot = this.snapshot.selectedSample;
@@ -2214,10 +1939,8 @@ export class TrackerApplication {
     if (event.target === this.moduleInput) {
       this.invalidateAllSampleCaches();
       await loadModuleFromInput(this.engine, this.moduleInput);
-      this.suppressNextModernRender = false;
       this.stopSamplePreviewSession(false);
       this.snapshot = this.engine.getSnapshot();
-      this.samplePanelKey = null;
       this.render();
       return;
     }
@@ -2353,10 +2076,9 @@ export class TrackerApplication {
       getSampleEditorView: (snapshot) => this.getSampleEditorView(snapshot),
       invalidateSampleCache: (sample) => this.invalidateSampleCache(sample),
       refreshSelectedSampleWaveform: (snapshot, force) => this.refreshSelectedSampleWaveform(snapshot, force),
-      setSuppressNextModernRender: (value) => { this.suppressNextModernRender = value; },
       setSampleEditorViewOverride: (value) => { this.sampleEditorViewOverride = value; },
       setSnapshot: (snapshot) => { this.snapshot = snapshot; },
-      updateModernLiveRegions: (snapshot) => this.updateModernLiveRegions(snapshot),
+      render: () => this.render(),
     });
   }
 
@@ -2544,7 +2266,6 @@ export class TrackerApplication {
 
     const note = this.absoluteToTrackerNote(midiNote);
     const channel = this.snapshot.cursor.channel;
-    this.suppressNextModernRender = true;
     this.engine.dispatch({
       type: 'pattern/set-cell',
       row: this.snapshot.cursor.row,
@@ -2557,9 +2278,8 @@ export class TrackerApplication {
       this.triggerPianoGlow(channel, absolute);
     }
     this.snapshot = this.engine.getSnapshot();
-    this.suppressNextModernRender = true;
     this.moveModernCursor(this.snapshot.cursor.row + 1, channel, 'note');
-    this.updateModernLiveRegions(this.snapshot);
+    this.render();
     void velocity;
   }
 
@@ -2741,7 +2461,7 @@ export class TrackerApplication {
     if (!outcome) {
       if (this.handleModernHexEntry(event)) {
         this.snapshot = this.engine.getSnapshot();
-        this.updateModernLiveRegions(this.snapshot);
+        this.render();
       }
       return;
     }
@@ -2750,7 +2470,7 @@ export class TrackerApplication {
 
     if (typeof outcome.octave === 'number') {
       this.keyboardOctave = outcome.octave;
-      this.updateModernLiveRegions(this.snapshot);
+      this.render();
     }
 
     if (outcome.transport) {
@@ -2771,7 +2491,7 @@ export class TrackerApplication {
         }
         this.engine.setTransport(outcome.transport);
       }
-      this.updateModernLiveRegions(this.snapshot);
+      this.render();
     }
 
     if (outcome.command) {
@@ -2784,7 +2504,6 @@ export class TrackerApplication {
         this.modernPressedNoteKeys.add(event.code);
         this.modernRecentNoteKeyTimes.set(event.code, event.timeStamp);
         const channel = this.snapshot.cursor.channel;
-        this.suppressNextModernRender = true;
         this.engine.dispatch(outcome.command);
         this.previewModernNote(outcome.command.patch.note, channel);
         const absolute = noteToAbsolute(outcome.command.patch.note);
@@ -2792,15 +2511,14 @@ export class TrackerApplication {
           this.triggerPianoGlow(channel, absolute);
         }
         this.snapshot = this.engine.getSnapshot();
-        this.suppressNextModernRender = true;
         this.moveModernCursor(this.snapshot.cursor.row + 1, channel, 'note');
-        this.updateModernLiveRegions(this.snapshot);
+        this.render();
         return;
       }
 
       this.engine.dispatch(outcome.command);
       this.snapshot = this.engine.getSnapshot();
-      this.updateModernLiveRegions(this.snapshot);
+      this.render();
     }
   }
 
@@ -2882,252 +2600,6 @@ export class TrackerApplication {
     });
   }
 
-  private updateModernLiveRegions(snapshot: TrackerSnapshot, reason: ModernRedrawReason = 'ui'): void {
-    if (this.viewMode !== 'modern' || !this.domRefs) {
-      return;
-    }
-
-    let refs = this.domRefs;
-    if (this.renameState?.kind !== 'song') {
-      this.setElementHtml(refs.songTitle, this.renderSongTitleHtml(snapshot));
-    }
-    this.setElementText(refs.metricPosition, String(snapshot.transport.position).padStart(2, '0'));
-    this.setElementText(refs.metricPattern, String(snapshot.pattern.index).padStart(2, '0'));
-    this.setElementText(refs.metricLength, String(snapshot.song.length).padStart(2, '0'));
-    this.setElementText(refs.metricBpm, String(snapshot.transport.bpm));
-    this.setElementText(refs.metricTime, formatSongTime(snapshot));
-    this.setElementText(refs.metricSize, `${snapshot.song.sizeBytes} bytes`);
-    this.setElementText(refs.octaveValue, `Octave ${this.keyboardOctave}`);
-    this.setElementText(refs.visualizationLabel, getVisualizationLabel(this.visualizationMode));
-    if (reason !== 'transport' && reason !== 'sample-preview') {
-      this.updateSamplePanel(snapshot);
-      refs = this.domRefs ?? refs;
-    }
-    this.updateTrackMuteButtons(snapshot);
-
-    const playbackMode = snapshot.transport.playing ? snapshot.transport.mode : this.preferredTransportMode;
-    const transportToggle = refs.transportToggle;
-    if (transportToggle) {
-      const label = snapshot.transport.playing ? 'Pause playback' : (playbackMode === 'pattern' ? 'Play pattern' : 'Play module');
-      transportToggle.disabled = false;
-      transportToggle.classList.toggle('is-active', snapshot.transport.playing);
-      transportToggle.dataset.action = 'transport-toggle';
-      if (transportToggle.title !== label) {
-        transportToggle.title = label;
-        transportToggle.setAttribute('aria-label', label);
-      }
-      const nextToggleState = `${snapshot.transport.playing}:${playbackMode}`;
-      if (transportToggle.dataset.toggleState !== nextToggleState) {
-        transportToggle.dataset.toggleState = nextToggleState;
-        transportToggle.innerHTML = `${iconMarkup(snapshot.transport.playing ? Pause : Play)}<span class="sr-only">${label}</span>`;
-      }
-    }
-
-    const transportMode = refs.transportMode;
-    if (transportMode) {
-      const label = playbackMode === 'pattern' ? 'Pattern playback' : 'Module playback';
-      transportMode.classList.toggle('is-active', playbackMode === 'pattern');
-      if (transportMode.title !== label) {
-        transportMode.title = label;
-        transportMode.setAttribute('aria-label', label);
-      }
-      const modeValue = refs.transportModeValue;
-      if (modeValue) {
-        modeValue.textContent = playbackMode === 'pattern' ? 'P' : 'M';
-      }
-    }
-
-    const audioMode = refs.audioMode;
-    if (audioMode) {
-      const label = this.getAudioModeLabel(snapshot);
-      audioMode.classList.toggle('is-active', snapshot.audio.mode !== 'custom');
-      if (audioMode.title !== label) {
-        audioMode.title = label;
-        audioMode.setAttribute('aria-label', label);
-      }
-      const nextAudioState = snapshot.audio.mode;
-      if (audioMode.dataset.audioState !== nextAudioState) {
-        audioMode.dataset.audioState = nextAudioState;
-        audioMode.innerHTML = `${iconMarkup(Volume2)}<span class="tool-icon-button__value" aria-hidden="true">${this.getAudioModeValue(snapshot)}</span><span class="sr-only">${label}</span>`;
-      }
-    }
-
-    const canEdit = this.canEditSnapshot(snapshot);
-    for (const button of refs.songStepperButtons) {
-      button.disabled = !canEdit;
-    }
-
-    for (const [octaveKey, active] of [['1', this.keyboardOctave === 1], ['2', this.keyboardOctave === 2]] as const) {
-      const button = refs.octaveButtons[octaveKey];
-      if (button) {
-        button.classList.toggle('is-active', active);
-        button.setAttribute('aria-pressed', active ? 'true' : 'false');
-      }
-    }
-
-    const samplePreviewToggle = refs.samplePreviewToggle;
-    if (samplePreviewToggle) {
-      const disabled = snapshot.samples[snapshot.selectedSample]?.length <= 0;
-      const action = this.samplePreviewPlaying ? 'sample-preview-stop' : 'sample-preview-play';
-      const label = this.samplePreviewPlaying ? 'Stop preview' : 'Play preview';
-      samplePreviewToggle.disabled = disabled;
-      samplePreviewToggle.dataset.action = action;
-      if (samplePreviewToggle.dataset.previewState !== `${action}:${disabled}`) {
-        samplePreviewToggle.dataset.previewState = `${action}:${disabled}`;
-        samplePreviewToggle.innerHTML = `${iconMarkup(this.samplePreviewPlaying ? Square : Play)}<span class="sr-only">${label}</span>`;
-      }
-    }
-
-    const sampleLoadSelected = refs.sampleLoadSelected;
-    if (sampleLoadSelected) {
-      const label = snapshot.samples[snapshot.selectedSample]?.length > 0 ? 'Replace sample' : 'Load sample';
-      sampleLoadSelected.disabled = !canEdit;
-      if (sampleLoadSelected.title !== label) {
-        sampleLoadSelected.title = label;
-        sampleLoadSelected.setAttribute('aria-label', label);
-      }
-    }
-
-    const sampleEditorPreviewToggle = refs.sampleEditorPreviewToggle;
-    if (sampleEditorPreviewToggle) {
-      const disabled = snapshot.samples[snapshot.selectedSample]?.length <= 0;
-      const action = this.samplePreviewPlaying ? 'sample-editor-stop' : 'sample-editor-preview';
-      const label = this.samplePreviewPlaying ? 'Stop preview' : 'Play preview';
-      sampleEditorPreviewToggle.disabled = disabled;
-      sampleEditorPreviewToggle.dataset.action = action;
-      if (sampleEditorPreviewToggle.dataset.previewState !== `${action}:${disabled}`) {
-        sampleEditorPreviewToggle.dataset.previewState = `${action}:${disabled}`;
-        sampleEditorPreviewToggle.innerHTML = `${iconMarkup(this.samplePreviewPlaying ? Square : Play)}<span class="sr-only">${label}</span>`;
-      }
-    }
-
-    const hasSampleSelection = snapshot.sampleEditor.selectionStart !== null
-      && snapshot.sampleEditor.selectionEnd !== null
-      && snapshot.sampleEditor.selectionEnd - snapshot.sampleEditor.selectionStart >= 2;
-
-    const sampleEditorShowSelectionButton = refs.sampleEditorShowSelection;
-    if (sampleEditorShowSelectionButton) {
-      sampleEditorShowSelectionButton.disabled = !hasSampleSelection;
-    }
-
-    const sampleEditorCropButton = refs.sampleEditorCrop;
-    if (sampleEditorCropButton) {
-      sampleEditorCropButton.disabled = !canEdit || !hasSampleSelection;
-    }
-
-    const sampleEditorCutButton = refs.sampleEditorCut;
-    if (sampleEditorCutButton) {
-      sampleEditorCutButton.disabled = !canEdit || !hasSampleSelection;
-    }
-    const loopEnabled = snapshot.samples[snapshot.selectedSample].loopLength > 2 && snapshot.samples[snapshot.selectedSample].length > 2;
-    const sampleEditorLoopToggle = refs.sampleEditorLoopToggle;
-    if (sampleEditorLoopToggle) {
-      sampleEditorLoopToggle.disabled = !canEdit || snapshot.samples[snapshot.selectedSample].length <= 1;
-      sampleEditorLoopToggle.classList.toggle('is-active', loopEnabled);
-      sampleEditorLoopToggle.setAttribute('aria-pressed', loopEnabled ? 'true' : 'false');
-    }
-
-    const sample = snapshot.samples[snapshot.selectedSample];
-    const sampleEditorVolumeButton = refs.sampleEditorVolumeButton;
-    if (sampleEditorVolumeButton) {
-      sampleEditorVolumeButton.disabled = !canEdit || sample.length <= 0;
-      sampleEditorVolumeButton.classList.toggle('is-active', this.openSampleEditorPopover === 'volume');
-      const label = `Volume ${sample.volume}`;
-      if (sampleEditorVolumeButton.title !== label) {
-        sampleEditorVolumeButton.title = label;
-        sampleEditorVolumeButton.setAttribute('aria-label', label);
-      }
-      if (refs.sampleEditorVolumeValue) {
-        refs.sampleEditorVolumeValue.textContent = String(sample.volume);
-      }
-    }
-
-    const sampleEditorFineTuneButton = refs.sampleEditorFineTuneButton;
-    if (sampleEditorFineTuneButton) {
-      const fineTuneText = this.formatFineTuneValue(sample.fineTune);
-      sampleEditorFineTuneButton.disabled = !canEdit || sample.length <= 0;
-      sampleEditorFineTuneButton.classList.toggle('is-active', this.openSampleEditorPopover === 'fineTune');
-      const label = `Fine tune ${fineTuneText}`;
-      if (sampleEditorFineTuneButton.title !== label) {
-        sampleEditorFineTuneButton.title = label;
-        sampleEditorFineTuneButton.setAttribute('aria-label', label);
-      }
-      if (refs.sampleEditorFineTuneValue) {
-        refs.sampleEditorFineTuneValue.textContent = fineTuneText;
-      }
-    }
-
-    this.setElementText(refs.sampleEditorLength, String(sample.length));
-    if (this.sampleEditorNumberEdit?.field !== 'volume') {
-      this.setElementText(refs.sampleEditorVolumeDisplay, String(sample.volume));
-    }
-    this.syncInputNodeValues(refs.sampleVolumeInputs, String(sample.volume));
-    if (this.sampleEditorNumberEdit?.field !== 'fineTune') {
-      this.setElementText(refs.sampleEditorFineTuneDisplay, this.formatFineTuneValue(sample.fineTune));
-    }
-    this.syncInputNodeValues(refs.sampleFineTuneInputs, String(sample.fineTune));
-
-    const view = this.getSampleEditorView(snapshot);
-    const sampleEditorScroll = refs.sampleEditorScroll;
-    if (sampleEditorScroll) {
-      const max = Math.max(0, snapshot.sampleEditor.sampleLength - view.length);
-      sampleEditorScroll.max = String(max);
-      sampleEditorScroll.value = String(clamp(view.start, 0, max));
-      sampleEditorScroll.disabled = snapshot.sampleEditor.sampleLength <= 0;
-    }
-    this.updateSampleEditorScrollbarThumb(snapshot.sampleEditor.sampleLength, view.length);
-
-    this.setElementText(refs.sampleEditorVisible, `${view.start} - ${view.end}`);
-    this.setElementText(refs.sampleEditorLoop, `${snapshot.sampleEditor.loopStart} - ${snapshot.sampleEditor.loopEnd}`);
-
-    this.redrawModernCanvases(snapshot, reason);
-  }
-
-  private updateTrackMuteButtons(snapshot: TrackerSnapshot): void {
-    if (!this.domRefs) {
-      return;
-    }
-
-    updateModernTrackMuteButtons({
-      refs: this.domRefs,
-      snapshot,
-      renderMuteIcon: (muted) => iconMarkup(muted ? VolumeX : Volume2),
-    });
-  }
-
-  private updateSamplePanel(snapshot: TrackerSnapshot): void {
-    if (!this.domRefs) {
-      return;
-    }
-
-    const previousKey = this.samplePanelKey;
-    this.samplePanelKey = updateModernSamplePanel({
-      refs: this.domRefs,
-      snapshot,
-      samplePanelKey: this.samplePanelKey,
-      samplePreviewCanvas: this.samplePreviewCanvas,
-      formatSelectedSampleHint: (sample) => formatSampleLength(sample),
-      resolveSamplePage: (nextSnapshot) => this.resolveSamplePage(nextSnapshot),
-      getSamplePageCount: (nextSnapshot) => this.getSamplePageCount(nextSnapshot),
-      getSamplePanelKey: (nextSnapshot, samplePage) => this.getSamplePanelKey(nextSnapshot, samplePage),
-      getSelectedSampleHeading: (sample) => this.getSelectedSampleHeading(sample),
-      renderSampleBank: (nextSnapshot, samplePage) => this.renderSampleBank(nextSnapshot, samplePage),
-      mountSampleBank: (container, nextSnapshot, samplePage) => {
-        renderSampleBankView(container, this.getSampleBankOptions(nextSnapshot, samplePage));
-      },
-      renderSelectedSamplePanel: (sample, nextSnapshot) => this.renderSelectedSamplePanel(sample, nextSnapshot),
-      mountSelectedSamplePanel: (container, sample, nextSnapshot) => {
-        renderSelectedSamplePanelView(container, this.getSelectedSamplePanelOptions(sample, nextSnapshot));
-      },
-      renderSelectedSampleTitle: (_sample) => this.renderSampleTitleHtml(snapshot),
-      syncSelectedSampleTitle: this.renameState?.kind !== 'sample',
-    });
-
-    if (previousKey !== this.samplePanelKey && this.domRefs.appShell) {
-      this.collectModernDomRefs(this.domRefs.appShell);
-    }
-  }
-
   private updateSampleEditorScrollbarThumb(sampleLength: number, viewLength: number): void {
     const scrollbar = this.domRefs?.sampleEditorScroll ?? null;
     if (!scrollbar) {
@@ -3186,7 +2658,7 @@ export class TrackerApplication {
     }
 
     this.moveModernCursor(nextCursor.row, nextCursor.channel, nextCursor.field);
-    this.updateModernLiveRegions(this.snapshot);
+    this.render();
   }
 
   private handleSampleEditorPointerDown(event: MouseEvent): void {
@@ -3257,7 +2729,7 @@ export class TrackerApplication {
     }
 
     this.snapshot = nextSnapshot;
-    this.updateModernLiveRegions(this.snapshot);
+    this.render();
   }
 
   private handleSampleEditorWheel(event: WheelEvent): void {
@@ -3272,7 +2744,7 @@ export class TrackerApplication {
       this.snapshot,
       (clientX, snapshot) => this.sampleEditorXToOffset(clientX, snapshot),
     );
-    this.updateModernLiveRegions(this.snapshot);
+    this.render();
   }
 
   private resolvePatternFieldFromPointer(
@@ -3310,7 +2782,7 @@ export class TrackerApplication {
     this.activePianoNotes[channel] = targetKey.absolute;
     this.snapshot = this.engine.getSnapshot();
     this.moveModernCursor(this.snapshot.cursor.row + 1, channel, 'note');
-    this.updateModernLiveRegions(this.snapshot);
+    this.render();
   }
 
   private handleClassicCanvasPointerMove(event: MouseEvent): void {

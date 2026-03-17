@@ -1,5 +1,6 @@
 import { featureFlags } from '../../config/featureFlags';
 import type { CursorField, PatternCell, SampleSlot, TrackerSnapshot } from '../../core/trackerTypes';
+import type { InlineNameFieldRenderOptions } from './viewModels';
 import {
   escapeHtml,
   formatCellEffect,
@@ -36,6 +37,16 @@ export const renderToolIconButton = (
     ${disabled ? 'disabled' : ''}
   >${iconHtml}${valueText ? `<span class="tool-icon-button__value" aria-hidden="true">${escapeHtml(valueText)}</span>` : ''}<span class="sr-only">${escapeHtml(label)}</span></button>
 `;
+
+export const renderInlineNameField = ({
+  target,
+  editing,
+  value,
+  displayValue,
+  maxLength,
+}: InlineNameFieldRenderOptions): string => (editing
+  ? `<input class="inline-rename-input" data-inline-rename="${target}" maxlength="${maxLength}" value="${escapeHtml(value)}" />`
+  : `<button type="button" class="inline-name-display" data-rename-target="${target}">${escapeHtml(displayValue)}</button>`);
 
 export const renderTransportButtonContent = (playing: boolean, iconHtml: string): string =>
   `${iconHtml}<span>${playing ? 'Stop' : 'Play'}</span>`;
@@ -258,7 +269,7 @@ export interface SelectedSamplePanelRenderOptions {
   sample: SampleSlot;
   editable: boolean;
   samplePreviewPlaying: boolean;
-  sampleTitleHtml: string;
+  sampleTitle: InlineNameFieldRenderOptions;
   playIconHtml: string;
   stopIconHtml: string;
   editIconHtml: string;
@@ -270,7 +281,7 @@ export const renderSelectedSamplePanel = ({
   sample,
   editable,
   samplePreviewPlaying,
-  sampleTitleHtml,
+  sampleTitle,
   playIconHtml,
   stopIconHtml,
   editIconHtml,
@@ -281,7 +292,7 @@ export const renderSelectedSamplePanel = ({
     <div class="sample-detail-head">
       <div>
         <p class="metric-label">Sample ${String(sample.index + 1).padStart(2, '0')}</p>
-        <strong class="sample-detail-title panel-title panel-title--editable" data-role="selected-sample-title">${sampleTitleHtml}</strong>
+        <strong class="sample-detail-title panel-title panel-title--editable" data-role="selected-sample-title">${renderInlineNameField(sampleTitle)}</strong>
       </div>
       <div class="sample-detail-actions">
         ${renderToolIconButton(samplePreviewPlaying ? 'sample-preview-stop' : 'sample-preview-play', samplePreviewPlaying ? stopIconHtml : playIconHtml, samplePreviewPlaying ? 'Stop preview' : 'Play preview', samplePreviewPlaying, sample.length <= 0, 'sample-preview-toggle')}
@@ -301,7 +312,7 @@ export interface SampleEditorPanelRenderOptions {
   samplePreviewPlaying: boolean;
   collapsed: boolean;
   collapseIconHtml: string;
-  selectedSampleTitleHtml: string;
+  selectedSampleTitle: InlineNameFieldRenderOptions;
   view: { start: number; length: number; end: number };
   showAllIconHtml: string;
   showSelectionIconHtml: string;
@@ -329,7 +340,7 @@ export const renderSampleEditorPanel = ({
   samplePreviewPlaying,
   collapsed,
   collapseIconHtml,
-  selectedSampleTitleHtml,
+  selectedSampleTitle,
   view,
   showAllIconHtml,
   showSelectionIconHtml,
@@ -365,7 +376,7 @@ export const renderSampleEditorPanel = ({
             </span>
             <span class="section-heading-button__icon" aria-hidden="true">${collapseIconHtml}</span>
           </button>
-          <h2 class="panel-title panel-title--editable panel-title--section-detail">Sample ${String(sample.index + 1).padStart(2, '0')} ${selectedSampleTitleHtml}</h2>
+          <h2 class="panel-title panel-title--editable panel-title--section-detail">Sample ${String(sample.index + 1).padStart(2, '0')} ${renderInlineNameField(selectedSampleTitle)}</h2>
         </div>
         <div class="panel-head-actions">
           <div class="sample-editor-toolbar">

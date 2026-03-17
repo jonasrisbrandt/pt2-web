@@ -45,7 +45,6 @@ export interface ModernClickActionContext {
   setViewMode: (mode: ViewMode) => void;
   setVisualizationMode: (mode: 'piano') => void;
   shiftVisualization: (direction: -1 | 1) => void;
-  updateModernLiveRegions: (snapshot: TrackerSnapshot) => void;
 }
 
 export const handleModernClickAction = async ({
@@ -81,7 +80,6 @@ export const handleModernClickAction = async ({
   setViewMode,
   setVisualizationMode,
   shiftVisualization,
-  updateModernLiveRegions,
 }: ModernClickActionContext): Promise<boolean> => {
   switch (target.dataset.action) {
     case 'new-song':
@@ -119,7 +117,7 @@ export const handleModernClickAction = async ({
       if (snapshot.transport.playing) {
         engine.setTransport({ type: nextMode === 'pattern' ? 'transport/play-pattern' : 'transport/play-song' });
       } else {
-        updateModernLiveRegions(snapshot);
+        render();
       }
       return true;
     }
@@ -215,19 +213,19 @@ export const handleModernClickAction = async ({
       return true;
     case 'octave-down':
       setKeyboardOctave(clamp(keyboardOctave - 1, MIN_OCTAVE, MAX_OCTAVE));
-      updateModernLiveRegions(snapshot);
+      render();
       return true;
     case 'octave-up':
       setKeyboardOctave(clamp(keyboardOctave + 1, MIN_OCTAVE, MAX_OCTAVE));
-      updateModernLiveRegions(snapshot);
+      render();
       return true;
     case 'octave-set-1':
       setKeyboardOctave(1);
-      updateModernLiveRegions(snapshot);
+      render();
       return true;
     case 'octave-set-2':
       setKeyboardOctave(2);
-      updateModernLiveRegions(snapshot);
+      render();
       return true;
     case 'visualization-prev':
       shiftVisualization(-1);
@@ -253,7 +251,7 @@ export const handleModernClickAction = async ({
         const nextSnapshot = engine.getSnapshot();
         setSnapshot(nextSnapshot);
         startSamplePreviewSession(nextSnapshot, 'sample');
-        updateModernLiveRegions(nextSnapshot);
+        render();
       }
       setSamplePreviewPlaying(true);
       return true;
@@ -266,7 +264,7 @@ export const handleModernClickAction = async ({
       engine.setTransport({ type: 'transport/pause' });
       stopSamplePreviewSession();
       setSamplePreviewPlaying(false);
-      updateModernLiveRegions(engine.getSnapshot());
+      render();
       return true;
     case 'sample-editor-open':
       clearSampleEditorViewOverride();
@@ -285,7 +283,7 @@ export const handleModernClickAction = async ({
       clearSampleEditorViewOverride();
       engine.dispatch({ type: 'sample-editor/show-all' });
       setSnapshot(engine.getSnapshot());
-      updateModernLiveRegions(engine.getSnapshot());
+      render();
       return true;
     case 'sample-editor-show-selection':
       if (snapshot.sampleEditor.selectionStart !== null && snapshot.sampleEditor.selectionEnd !== null) {
@@ -294,7 +292,7 @@ export const handleModernClickAction = async ({
           start: snapshot.sampleEditor.selectionStart,
           length: Math.max(2, snapshot.sampleEditor.selectionEnd - snapshot.sampleEditor.selectionStart),
         });
-        updateModernLiveRegions(snapshot);
+        render();
       }
       return true;
     case 'sample-editor-zoom-in': {
@@ -303,7 +301,7 @@ export const handleModernClickAction = async ({
       engine.dispatch({ type: 'sample-editor/zoom-in', anchor });
       const nextSnapshot = engine.getSnapshot();
       setSnapshot(nextSnapshot);
-      updateModernLiveRegions(nextSnapshot);
+      render();
       return true;
     }
     case 'sample-editor-zoom-out': {
@@ -312,7 +310,7 @@ export const handleModernClickAction = async ({
       engine.dispatch({ type: 'sample-editor/zoom-out', anchor });
       const nextSnapshot = engine.getSnapshot();
       setSnapshot(nextSnapshot);
-      updateModernLiveRegions(nextSnapshot);
+      render();
       return true;
     }
     case 'sample-editor-preview': {
@@ -325,7 +323,7 @@ export const handleModernClickAction = async ({
         const nextSnapshot = engine.getSnapshot();
         setSnapshot(nextSnapshot);
         startSamplePreviewSession(nextSnapshot, 'sample');
-        updateModernLiveRegions(nextSnapshot);
+        render();
       }
       setSamplePreviewPlaying(true);
       return true;
@@ -334,7 +332,7 @@ export const handleModernClickAction = async ({
       engine.setTransport({ type: 'transport/pause' });
       stopSamplePreviewSession();
       setSamplePreviewPlaying(false);
-      updateModernLiveRegions(engine.getSnapshot());
+      render();
       return true;
     case 'sample-editor-toggle-loop':
       if (!canEditSnapshot(snapshot)) {
@@ -356,7 +354,7 @@ export const handleModernClickAction = async ({
         });
       }
       setSnapshot(engine.getSnapshot());
-      updateModernLiveRegions(engine.getSnapshot());
+      render();
       return true;
     case 'sample-editor-crop': {
       if (!canEditSnapshot(snapshot)) {
@@ -368,7 +366,7 @@ export const handleModernClickAction = async ({
       const nextSnapshot = engine.getSnapshot();
       setSnapshot(nextSnapshot);
       refreshSelectedSampleWaveform(nextSnapshot, true);
-      updateModernLiveRegions(nextSnapshot);
+      render();
       return true;
     }
     case 'sample-editor-cut': {
@@ -381,7 +379,7 @@ export const handleModernClickAction = async ({
       const nextSnapshot = engine.getSnapshot();
       setSnapshot(nextSnapshot);
       refreshSelectedSampleWaveform(nextSnapshot, true);
-      updateModernLiveRegions(nextSnapshot);
+      render();
       return true;
     }
     case 'select-cell':

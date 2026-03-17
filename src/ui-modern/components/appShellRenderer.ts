@@ -1,5 +1,7 @@
 import type { SampleSlot } from '../../core/trackerTypes';
 import type { SelectedSamplePanelRenderOptions } from './markupRenderer';
+import type { InlineNameFieldRenderOptions } from './viewModels';
+import type { RenderJob, SynthSnapshot } from '../../core/synthTypes';
 
 export interface SampleBankRenderItem {
   sample: SampleSlot;
@@ -64,257 +66,52 @@ export interface ModuleGridRenderOptions {
   cards: ModuleCardRenderOptions[];
 }
 
+export interface TrackHeaderRenderOptions {
+  channel: number;
+  muted: boolean;
+  muteIconHtml: string;
+}
+
+export interface ClassicDebugRenderOptions {
+  enabled: boolean;
+}
+
+export interface SampleCreatorRenderOptions {
+  snapshot: SynthSnapshot | null;
+  targetSample: SampleSlot | null;
+  keyboardOctave: number;
+  renderJob: RenderJob;
+}
+
 export interface AppShellRenderOptions {
   viewMode: 'modern' | 'classic';
   workspaceMode?: 'tracker' | 'sample-creator';
-  viewToggleHtml: string;
-  viewToggleOptions?: ToolbarButtonRenderOptions[] | null;
-  songTitleHtml: string;
-  transportControlsHtml: string;
-  moduleTransportOptions?: ToolIconButtonRenderOptions[] | null;
-  moduleCardsHtml: string;
-  moduleGridOptions?: ModuleGridRenderOptions | null;
+  viewToggleOptions: ToolbarButtonRenderOptions[];
+  songTitle: InlineNameFieldRenderOptions;
+  moduleTransportOptions: ToolIconButtonRenderOptions[];
+  moduleGridOptions: ModuleGridRenderOptions;
   moduleCollapsed: boolean;
   moduleCollapseIconHtml: string;
   visualizationLabel: string;
-  visualizationPianoIconHtml: string;
-  visualizationPrevIconHtml: string;
-  visualizationNextIconHtml: string;
-  visualizationControlOptions?: IconButtonRenderOptions[] | null;
+  visualizationControlOptions: IconButtonRenderOptions[];
   visualizationCollapsed: boolean;
   visualizationCollapseIconHtml: string;
-  editorPanelHtml: string;
   patternEditorPanelOptions?: PatternPanelRenderOptions | null;
   sampleEditorPanelOptions?: import('./markupRenderer').SampleEditorPanelRenderOptions | null;
-  sampleButtonsHtml: string;
-  sampleBankOptions?: SampleBankRenderOptions | null;
-  selectedSamplePanelHtml: string;
-  selectedSamplePanelOptions?: SelectedSamplePanelRenderOptions | null;
+  sampleBankOptions: SampleBankRenderOptions;
+  selectedSamplePanelOptions: SelectedSamplePanelRenderOptions;
   samplesCollapsed: boolean;
   samplesCollapseIconHtml: string;
-  classicDebugHtml: string;
-  samplePagePrevDisabled: boolean;
-  samplePageNextDisabled: boolean;
-  samplePagePrevIconHtml: string;
-  samplePageNextIconHtml: string;
-  samplePageControlOptions?: IconButtonRenderOptions[] | null;
+  classicDebugOptions: ClassicDebugRenderOptions;
+  samplePageControlOptions: IconButtonRenderOptions[];
   fileMenuOpen: boolean;
   helpMenuOpen: boolean;
   aboutOpen: boolean;
   appVersion: string;
   fileActionsDisabled: boolean;
   importDisabled: boolean;
-  sampleCreatorHtml?: string;
+  sampleCreatorOptions?: SampleCreatorRenderOptions | null;
 }
-
-const renderMenuItem = (
-  action: string,
-  label: string,
-  disabled = false,
-  subtle = '',
-): string => `
-  <button
-    type="button"
-    class="menu-item${disabled ? ' is-disabled' : ''}"
-    data-action="${action}"
-    ${disabled ? 'disabled' : ''}
-  >
-    <span>${label}</span>
-    ${subtle ? `<span class="menu-item__meta">${subtle}</span>` : ''}
-  </button>
-`;
-
-export const renderAppShellMarkup = ({
-  viewMode,
-  workspaceMode = 'tracker',
-  viewToggleHtml,
-  songTitleHtml,
-  transportControlsHtml,
-  moduleCardsHtml,
-  moduleCollapsed,
-  moduleCollapseIconHtml,
-  visualizationLabel,
-  visualizationPianoIconHtml,
-  visualizationPrevIconHtml,
-  visualizationNextIconHtml,
-  visualizationCollapsed,
-  visualizationCollapseIconHtml,
-  editorPanelHtml,
-  sampleButtonsHtml,
-  selectedSamplePanelHtml,
-  samplesCollapsed,
-  samplesCollapseIconHtml,
-  classicDebugHtml,
-  samplePagePrevDisabled,
-  samplePageNextDisabled,
-  samplePagePrevIconHtml,
-  samplePageNextIconHtml,
-  fileMenuOpen,
-  helpMenuOpen,
-  aboutOpen,
-  appVersion,
-  fileActionsDisabled,
-  importDisabled,
-  sampleCreatorHtml = '',
-}: AppShellRenderOptions): string => `
-  <section class="menubar-shell" data-menu-root>
-    <div class="menubar">
-      <div class="menubar-group">
-        <button
-          type="button"
-          class="menu-trigger${fileMenuOpen ? ' is-open' : ''}"
-          data-action="toggle-menu-file"
-          data-menu-trigger="file"
-          aria-expanded="${fileMenuOpen ? 'true' : 'false'}"
-        >File</button>
-        <button
-          type="button"
-          class="menu-trigger${helpMenuOpen ? ' is-open' : ''}"
-          data-action="toggle-menu-help"
-          data-menu-trigger="help"
-          aria-expanded="${helpMenuOpen ? 'true' : 'false'}"
-        >Help</button>
-      </div>
-      <div class="menubar-group menubar-group--views">
-        <div class="view-toggle" role="tablist" aria-label="View mode">
-          ${viewToggleHtml}
-        </div>
-      </div>
-    </div>
-    <div class="menu-surface${fileMenuOpen ? ' is-open' : ''}" data-menu-panel="file">
-      ${renderMenuItem('new-song', 'New MOD', fileActionsDisabled)}
-      ${renderMenuItem('load-module', 'Load MOD', fileActionsDisabled)}
-      ${renderMenuItem('save-module', 'Save MOD')}
-      ${renderMenuItem('save-module-as', 'Save MOD as...')}
-      <div class="menu-separator" role="separator"></div>
-      ${renderMenuItem('import-samples', 'Import samples...', importDisabled)}
-    </div>
-    <div class="menu-surface menu-surface--help${helpMenuOpen ? ' is-open' : ''}" data-menu-panel="help">
-      ${renderMenuItem('open-about', 'About')}
-    </div>
-  </section>
-
-  <main class="workspace workspace--${workspaceMode}">
-    ${workspaceMode === 'sample-creator'
-      ? `
-        <section class="sample-creator-shell">
-          ${sampleCreatorHtml}
-        </section>
-      `
-      : `
-    <section class="tracker-stack">
-      <article class="panel module-panel${moduleCollapsed ? ' is-collapsed' : ''}">
-        <div class="panel-head compact panel-head--section module-head">
-          <div class="panel-heading-copy">
-            <button type="button" class="section-heading-button" data-action="toggle-section-module" aria-expanded="${moduleCollapsed ? 'false' : 'true'}">
-              <span class="section-heading-button__copy">
-                <span class="panel-label">Module</span>
-              </span>
-              <span class="section-heading-button__icon" aria-hidden="true">${moduleCollapseIconHtml}</span>
-            </button>
-            <h2 class="panel-title panel-title--editable panel-title--section-detail" data-role="song-title">${songTitleHtml}</h2>
-          </div>
-          <div class="panel-head-actions">
-            <div class="module-transport-controls">
-              ${transportControlsHtml}
-            </div>
-          </div>
-        </div>
-        <div class="panel-body">
-          <div class="module-grid">
-            ${moduleCardsHtml}
-          </div>
-        </div>
-      </article>
-
-      <article class="panel visualization-panel${visualizationCollapsed ? ' is-collapsed' : ''}">
-        <div class="panel-head compact panel-head--section">
-          <div class="panel-heading-copy">
-            <button type="button" class="section-heading-button" data-action="toggle-section-visualization" aria-expanded="${visualizationCollapsed ? 'false' : 'true'}">
-              <span class="section-heading-button__copy">
-                <span class="panel-label">Visualization</span>
-              </span>
-              <span class="section-heading-button__icon" aria-hidden="true">${visualizationCollapseIconHtml}</span>
-            </button>
-            <h2 class="panel-title panel-title--subtle panel-title--section-detail" data-role="visualization-label">${visualizationLabel}</h2>
-          </div>
-          <div class="panel-head-actions">
-            <div class="visualization-controls">
-              <button type="button" class="icon-button" data-action="visualization-piano">${visualizationPianoIconHtml}<span class="sr-only">Show piano visualization</span></button>
-              <button type="button" class="icon-button" data-action="visualization-prev">${visualizationPrevIconHtml}<span class="sr-only">Previous visualization</span></button>
-              <button type="button" class="icon-button" data-action="visualization-next">${visualizationNextIconHtml}<span class="sr-only">Next visualization</span></button>
-            </div>
-          </div>
-        </div>
-        <div class="panel-body">
-          <div class="visualization-host" data-role="visualization-host"></div>
-        </div>
-      </article>
-
-      ${editorPanelHtml}
-    </section>
-
-    <aside class="inspector-stack">
-      <section class="panel inspector-panel${samplesCollapsed ? ' is-collapsed' : ''}">
-        <div class="panel-head compact panel-head--section">
-          <div class="panel-heading-copy">
-            <button type="button" class="section-heading-button" data-action="toggle-section-samples" aria-expanded="${samplesCollapsed ? 'false' : 'true'}">
-              <span class="section-heading-button__copy">
-                <span class="panel-label">Samples</span>
-              </span>
-              <span class="section-heading-button__icon" aria-hidden="true">${samplesCollapseIconHtml}</span>
-            </button>
-          </div>
-          <div class="panel-head-actions">
-            <div class="visualization-controls">
-              <button type="button" class="icon-button" data-action="sample-page-prev" ${samplePagePrevDisabled ? 'disabled' : ''}>${samplePagePrevIconHtml}<span class="sr-only">Previous sample page</span></button>
-              <button type="button" class="icon-button" data-action="sample-page-next" ${samplePageNextDisabled ? 'disabled' : ''}>${samplePageNextIconHtml}<span class="sr-only">Next sample page</span></button>
-            </div>
-          </div>
-        </div>
-        <div class="panel-body">
-          <div class="sample-bank" data-role="sample-bank">${sampleButtonsHtml}</div>
-          <div data-role="sample-detail-content">${selectedSamplePanelHtml}</div>
-        </div>
-      </section>
-
-      <section class="panel canvas-panel">
-        <div class="panel-body">
-          ${classicDebugHtml}
-          <div class="engine-canvas-host"></div>
-        </div>
-      </section>
-    </aside>
-      `}
-  </main>
-
-  <div class="modal-overlay${aboutOpen ? ' is-open' : ''}" data-role="about-modal">
-    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="about-title">
-      <div class="modal-head">
-        <div>
-          <p class="panel-label">Help</p>
-          <h2 class="panel-title" id="about-title">About</h2>
-        </div>
-        <button type="button" class="toolbar-button" data-action="close-about">Close</button>
-      </div>
-      <div class="modal-copy">
-        <p><strong>Version</strong> ${appVersion}</p>
-        <p><strong>Credits</strong></p>
-        <p>Original Amiga ProTracker lineage: Amiga Freelancers, followed by Peter "Crayon" Hanning and Anders Ramsay for the later 2.x line referenced by this project.</p>
-        <p>p2-clone core: Olav "8bitbubsy" Sorensen.</p>
-        <p>pt2 web port and UI shell: Jonas Risbrandt.</p>
-        <p><strong>Projects used</strong></p>
-        <p><a href="https://github.com/8bitbubsy/pt2-clone" target="_blank" rel="noreferrer">p2-clone</a>, <a href="https://github.com/libxmp/libxmp" target="_blank" rel="noreferrer">libxmp</a>, <a href="https://github.com/jprjr/miniflac" target="_blank" rel="noreferrer">miniflac</a>, and <a href="https://lucide.dev" target="_blank" rel="noreferrer">lucide</a>.</p>
-        <p><strong>License summary</strong></p>
-        <p><code>pt2-web</code>: BSD-3-Clause. <code>p2-clone</code>: BSD-3-Clause. PP20 depacker adaptation from <code>libxmp</code>: MIT. <code>miniflac</code>: BSD-0-style. <code>lucide</code>: ISC, with an MIT notice for Feather-derived portions.</p>
-        <p>Preserved Freedesktop.org packaging resources in the vendored upstream tree keep their upstream BSD-2-Clause-style notice.</p>
-        <p><a href="./LICENSE" target="_blank" rel="noreferrer">Project license</a></p>
-        <p><a href="./licenses/libxmp-MIT.txt" target="_blank" rel="noreferrer">MIT license copy for the PP20 adaptation</a></p>
-        <p><a href="./THIRD_PARTY_NOTICES.md" target="_blank" rel="noreferrer">Third-party notices</a></p>
-      </div>
-    </div>
-  </div>
-`;
 
 export interface PatternPanelRenderOptions {
   octave: number;
@@ -322,7 +119,7 @@ export interface PatternPanelRenderOptions {
   octaveTwoActive: boolean;
   collapsed: boolean;
   collapseIconHtml: string;
-  trackHeadersHtml: string;
+  trackHeaders: TrackHeaderRenderOptions[];
 }
 
 export const renderPatternEditorPanel = ({
@@ -331,7 +128,7 @@ export const renderPatternEditorPanel = ({
   octaveTwoActive,
   collapsed,
   collapseIconHtml,
-  trackHeadersHtml,
+  trackHeaders,
 }: PatternPanelRenderOptions): string => `
   <article class="panel pattern-panel editor-panel-shell${collapsed ? ' is-collapsed' : ''}">
     <div class="panel-head compact panel-head--section">
@@ -355,7 +152,20 @@ export const renderPatternEditorPanel = ({
     <div class="panel-body">
       <div class="pattern-header">
         <span>Row</span>
-        ${trackHeadersHtml}
+        ${trackHeaders.map(({ channel, muted, muteIconHtml }) => `
+          <span class="track-label track-label--${channel + 1}${muted ? ' is-muted' : ''}">
+            <button
+              type="button"
+              class="track-mute-button${muted ? ' is-muted' : ''}"
+              data-role="track-mute-${channel}"
+              data-action="toggle-track-mute"
+              data-channel="${channel}"
+              aria-pressed="${muted ? 'true' : 'false'}"
+              aria-label="${muted ? 'Unmute track' : 'Mute track'} ${channel + 1}"
+            >${muteIconHtml}</button>
+            <span>Track ${channel + 1}</span>
+          </span>
+        `).join('')}
       </div>
       <div class="pattern-canvas-host" data-role="pattern-host"></div>
     </div>

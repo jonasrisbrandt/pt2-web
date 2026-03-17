@@ -11,9 +11,9 @@
 
 <script setup lang="ts">
 import { ref } from 'vue';
-import { useLegacyTrackerApplication } from '../composables/useLegacyTrackerApplication';
+import { useTrackerApplicationHost } from '../composables/useTrackerApplicationHost';
 import FatalScreen from './FatalScreen.vue';
 
 const host = ref<HTMLElement | null>(null);
-const { startupError } = useLegacyTrackerApplication(host);
+const { startupError } = useTrackerApplicationHost(host);
 </script>
