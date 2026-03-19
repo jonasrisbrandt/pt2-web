@@ -15,7 +15,7 @@ import type {
   TransportMode,
   TrackerSnapshot,
 } from './core/trackerTypes';
-import type { RenderJob, SynthId, SynthParamId, SynthSnapshot } from './core/synthTypes';
+import type { RenderJob, SynthId, SynthParamId, SynthSnapshot, SynthTelemetrySnapshot } from './core/synthTypes';
 import {
   escapeHtml,
   formatCellNote,
@@ -229,6 +229,7 @@ export class TrackerApplication {
   private synthEngine: SynthEngine | null = null;
   private snapshot: TrackerSnapshot | null = null;
   private synthSnapshot: SynthSnapshot | null = null;
+  private synthTelemetry: SynthTelemetrySnapshot | null = null;
   private quadrascope: QuadrascopeState | null = null;
   private statusMessage = DEFAULT_STATUS;
   private keyboardOctave = 2;
@@ -361,8 +362,10 @@ export class TrackerApplication {
       },
       onSynthSnapshot: (snapshot) => {
         this.synthSnapshot = snapshot;
+        this.synthTelemetry = this.synthEngine?.getTelemetry() ?? this.synthTelemetry;
         this.sampleCreatorState.targetSlot = snapshot.targetSampleSlot;
         this.sampleCreatorState.sampleRate = snapshot.bakeSampleRate;
+        this.syncPlaybackCoordinator();
 
         if (featureFlags.sample_composer && this.workspaceMode === 'sample-creator') {
           this.render();
@@ -460,6 +463,7 @@ export class TrackerApplication {
     this.synthEngine = this.runtime.getSynthEngine();
     this.snapshot = initResult.snapshot;
     this.synthSnapshot = initResult.synthSnapshot;
+    this.synthTelemetry = this.synthEngine?.getTelemetry() ?? null;
     this.sampleCreatorState.sampleRate = initResult.synthSnapshot.bakeSampleRate;
     this.quadrascope = initResult.quadrascope;
     if (initResult.trackerWarning) {
@@ -1073,7 +1077,13 @@ export class TrackerApplication {
   }
 
   private hasPlaybackActivity(snapshot: TrackerSnapshot | null = this.snapshot): boolean {
-    return !!snapshot && (snapshot.transport.playing || this.samplePreviewSession !== null);
+    const synthPreviewActive = !!(
+      featureFlags.sample_composer
+      && this.workspaceMode === 'sample-creator'
+      && this.synthSnapshot
+      && this.synthSnapshot.activeNotes.length > 0
+    );
+    return !!snapshot && (snapshot.transport.playing || this.samplePreviewSession !== null || synthPreviewActive);
   }
 
   private stopPlaybackCoordinator(): void {
@@ -1517,6 +1527,22 @@ export class TrackerApplication {
         }
       }
 
+      if (
+        featureFlags.sample_composer
+        && this.workspaceMode === 'sample-creator'
+        && this.synthEngine
+        && this.synthSnapshot
+        && this.synthSnapshot.activeNotes.length > 0
+        && (this.lastVisualizationFrameAt === null || now - this.lastVisualizationFrameAt >= VISUALIZATION_FRAME_INTERVAL_MS)
+      ) {
+        const telemetry = this.synthEngine.getTelemetry();
+        this.lastVisualizationFrameAt = now;
+        if (telemetry && telemetry.version !== this.synthTelemetry?.version) {
+          this.synthTelemetry = telemetry;
+          this.render();
+        }
+      }
+
       if (this.hasPlaybackActivity()) {
         this.playbackTickActive = false;
         this.playbackFrame = window.requestAnimationFrame(tick);
@@ -1793,6 +1819,7 @@ export class TrackerApplication {
 
     return {
       snapshot: synthSnapshot,
+      telemetry: this.synthTelemetry,
       targetSample,
       keyboardOctave: this.keyboardOctave,
       renderJob: this.sampleCreatorState,
@@ -1881,16 +1908,19 @@ export class TrackerApplication {
         }
         if (this.snapshot && this.synthSnapshot) {
           this.workspaceMode = 'sample-creator';
+          this.synthTelemetry = this.synthEngine?.getTelemetry() ?? this.synthTelemetry;
           this.sampleCreatorState.targetSlot = this.snapshot.selectedSample;
           this.sampleCreatorState.sampleName = (this.snapshot.samples[this.snapshot.selectedSample]?.name || this.synthSnapshot.selectedSynth).slice(0, 22);
           this.synthEngine?.dispatch({ type: 'target-slot/set', slot: this.snapshot.selectedSample });
           this.synthEngine?.dispatch({ type: 'bake-rate/set', sampleRate: this.sampleCreatorState.sampleRate });
+          this.syncPlaybackCoordinator();
           this.render();
         }
         return;
       case 'sample-creator-close':
         this.workspaceMode = 'tracker';
         this.stopSynthPreview();
+        this.syncPlaybackCoordinator();
         this.render();
         return;
     }

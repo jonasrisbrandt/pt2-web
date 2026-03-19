@@ -1359,6 +1359,102 @@
   color: rgba(232, 242, 235, 0.7);
 }
 
+.sample-creator-card--telemetry {
+  gap: 1rem;
+}
+
+.sample-creator-telemetry {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.sample-creator-telemetry--empty {
+  min-height: 140px;
+  place-items: center;
+}
+
+.sample-creator-telemetry__summary {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.sample-creator-telemetry__metric {
+  display: grid;
+  gap: 0.28rem;
+  padding: 0.75rem 0.85rem;
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgba(212, 255, 117, 0.06), rgba(212, 255, 117, 0.01)),
+    rgba(255, 255, 255, 0.03);
+}
+
+.sample-creator-display-grid {
+  display: grid;
+  gap: 0.85rem;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.sample-creator-signal-display {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.8rem;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.sample-creator-signal-display__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: baseline;
+}
+
+.sample-creator-signal-plot {
+  min-height: 96px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    radial-gradient(circle at top, rgba(212, 255, 117, 0.05), transparent 55%),
+    rgba(8, 12, 13, 0.92);
+  overflow: hidden;
+}
+
+.sample-creator-signal-plot svg {
+  width: 100%;
+  height: 96px;
+  display: block;
+}
+
+.sample-creator-signal-plot__baseline {
+  stroke: rgba(239, 248, 231, 0.1);
+  stroke-width: 1;
+}
+
+.sample-creator-signal-plot__line {
+  fill: none;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sample-creator-signal-plot__line.is-lime {
+  stroke: #d4ff75;
+}
+
+.sample-creator-signal-plot__line.is-cyan {
+  stroke: #7ce7ff;
+}
+
+.sample-creator-signal-plot__line.is-amber {
+  stroke: #ffbe62;
+}
+
+.sample-creator-signal-plot__line.is-rose {
+  stroke: #ff7a9b;
+}
+
 .sample-creator-waveform {
   min-height: 112px;
   border-radius: 12px;

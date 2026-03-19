@@ -2,7 +2,8 @@ import type { SynthEngine } from './synthEngine';
 import { SYNTH_DEFINITIONS, SYNTH_PARAMETERS, SYNTH_PRESETS, applyPresetToPatch, createInitialSynthSnapshot } from './synthConfig';
 import { buildRenderedSampleFromCapture, createWaveformPreview, stereoToMono, type CapturedPreviewAudio } from './synthAudioUtils';
 import { SynthPreviewDriver } from './synthPreviewDriver';
-import type { RenderJob, RenderedSample, SynthCommand, SynthEvent, SynthSnapshot } from './synthTypes';
+import { buildSynthTelemetryFallback } from './synthRenderFallback';
+import type { RenderJob, RenderedSample, SynthCommand, SynthEvent, SynthSnapshot, SynthTelemetrySnapshot } from './synthTypes';
 
 const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
 const midiToFreq = (note: number): number => 440 * (2 ** ((note - 69) / 12));
@@ -22,6 +23,7 @@ export class MockSynthEngine implements SynthEngine {
   private previewDriver: SynthPreviewDriver | null = null;
   private voices: MockVoice[] = [];
   private recordedAudio: CapturedPreviewAudio | null = null;
+  private telemetryVersion = 1;
 
   async init(): Promise<void> {
     this.previewDriver = new SynthPreviewDriver(
@@ -150,6 +152,19 @@ export class MockSynthEngine implements SynthEngine {
 
   getSnapshot(): SynthSnapshot {
     return structuredClone(this.snapshot);
+  }
+
+  getTelemetry(): SynthTelemetrySnapshot | null {
+    if (!this.snapshot.ready) {
+      return null;
+    }
+
+    const activeNote = this.snapshot.activeNotes[0] ?? this.voices[0]?.midiNote ?? null;
+    const sampleRate = this.snapshot.previewSampleRate ?? this.snapshot.bakeSampleRate;
+    if (activeNote !== null) {
+      this.telemetryVersion += 1;
+    }
+    return buildSynthTelemetryFallback(this.snapshot, sampleRate, activeNote, this.telemetryVersion);
   }
 
   async renderSample(job: RenderJob): Promise<RenderedSample> {

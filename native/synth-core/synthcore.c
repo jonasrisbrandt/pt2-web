@@ -1,20 +1,87 @@
-#include <math.h>
-#include <stdbool.h>
-#include <stdint.h>
-#include <stdlib.h>
-#include <string.h>
-
 #include "synthcore.h"
+#include "synth_engine.h"
 
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
+static pt2SynthEngine_t pt2Engine;
+static float pt2TelemetryBuffer[PT2_SYNTH_TELEMETRY_BUFFER_LENGTH];
 
-#define PT2_SYNTH_MAX_VOICES 8
-#define PT2_SYNTH_MAX_PREVIEW_FRAMES 2048
-#define PT2_SYNTH_MAX_RENDER_SAMPLES 524288
-#define PT2_SYNTH_DELAY_BUFFER 131072
-#define PT2_SYNTH_CHORUS_BUFFER 8192
+int32_t pt2_synth_boot(void)
+{
+	pt2_synth_engine_boot(&pt2Engine);
+	return 1;
+}
+
+void pt2_synth_reset(void)
+{
+	pt2_synth_engine_reset(&pt2Engine);
+}
+
+void pt2_synth_set_synth(int32_t synthId)
+{
+	pt2_synth_engine_set_synth(&pt2Engine, synthId);
+}
+
+void pt2_synth_set_param(int32_t paramId, float value)
+{
+	pt2_synth_engine_set_param(&pt2Engine, paramId, value);
+}
+
+void pt2_synth_note_on(int32_t midiNote, float velocity)
+{
+	pt2_synth_engine_note_on(&pt2Engine, midiNote, velocity);
+}
+
+void pt2_synth_note_off(int32_t midiNote)
+{
+	pt2_synth_engine_note_off(&pt2Engine, midiNote);
+}
+
+void pt2_synth_panic(void)
+{
+	pt2_synth_engine_panic(&pt2Engine);
+}
+
+void pt2_synth_render_preview(int32_t frames, int32_t sampleRate)
+{
+	pt2_synth_engine_render_preview(&pt2Engine, frames, sampleRate);
+}
+
+const float *pt2_synth_preview_buffer(void)
+{
+	return pt2Engine.previewBuffer;
+}
+
+int32_t pt2_synth_preview_buffer_length(void)
+{
+	return pt2Engine.previewLength;
+}
+
+void pt2_synth_render_sample(int32_t midiNote, float velocity, float durationSeconds, float tailSeconds, int32_t sampleRate, int32_t normalize, int32_t fadeOut)
+{
+	pt2_synth_engine_render_sample(&pt2Engine, midiNote, velocity, durationSeconds, tailSeconds, sampleRate, normalize, fadeOut);
+}
+
+const int8_t *pt2_synth_sample_buffer(void)
+{
+	return pt2Engine.renderedSample;
+}
+
+int32_t pt2_synth_sample_buffer_length(void)
+{
+	return pt2Engine.renderedSampleLength;
+}
+
+const float *pt2_synth_telemetry_buffer(void)
+{
+	pt2_synth_engine_fill_telemetry(&pt2Engine, pt2TelemetryBuffer, PT2_SYNTH_TELEMETRY_BUFFER_LENGTH);
+	return pt2TelemetryBuffer;
+}
+
+int32_t pt2_synth_telemetry_buffer_length(void)
+{
+	return PT2_SYNTH_TELEMETRY_BUFFER_LENGTH;
+}
+
+#if 0
 
 enum
 {
@@ -611,3 +678,4 @@ int32_t pt2_synth_sample_buffer_length(void)
 {
 	return pt2RenderedSampleLength;
 }
+#endif

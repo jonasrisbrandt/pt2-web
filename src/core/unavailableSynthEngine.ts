@@ -1,6 +1,6 @@
 import { createInitialSynthSnapshot } from './synthConfig';
 import type { SynthEngine } from './synthEngine';
-import type { RenderJob, RenderedSample, SynthCommand, SynthEvent, SynthSnapshot } from './synthTypes';
+import type { RenderJob, RenderedSample, SynthCommand, SynthEvent, SynthSnapshot, SynthTelemetrySnapshot } from './synthTypes';
 
 export class UnavailableSynthEngine implements SynthEngine {
   private snapshot: SynthSnapshot = createInitialSynthSnapshot();
@@ -46,6 +46,10 @@ export class UnavailableSynthEngine implements SynthEngine {
 
   getSnapshot(): SynthSnapshot {
     return structuredClone(this.snapshot);
+  }
+
+  getTelemetry(): SynthTelemetrySnapshot | null {
+    return null;
   }
 
   async renderSample(_job: RenderJob): Promise<RenderedSample> {

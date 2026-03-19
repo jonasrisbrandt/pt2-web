@@ -213,6 +213,14 @@
       />
     </div>
 
+    <section class="sample-creator-card sample-creator-card--telemetry">
+      <div class="sample-creator-card__head">
+        <p class="metric-label">Synth displays</p>
+        <span class="hint">Embedded oscillator, modulation, filter, and output views.</span>
+      </div>
+      <SampleCreatorTelemetryPanel :telemetry="telemetry" />
+    </section>
+
     <div class="sample-creator-grid">
       <section
         v-for="section in controlSections"
@@ -267,11 +275,13 @@ import { SYNTH_DEFINITIONS, SYNTH_PARAMETERS, SYNTH_PRESETS } from '../../core/s
 import type { SampleCreatorRenderOptions } from '../../ui-modern/components/appShellRenderer';
 import SampleCreatorControlView from './SampleCreatorControlView.vue';
 import SampleCreatorPianoView from './SampleCreatorPianoView.vue';
+import SampleCreatorTelemetryPanel from './SampleCreatorTelemetryPanel.vue';
 import SampleCreatorWaveformView from './SampleCreatorWaveformView.vue';
 
 const props = defineProps<SampleCreatorRenderOptions>();
 
 const snapshot = computed(() => props.snapshot);
+const telemetry = computed(() => props.telemetry);
 const targetSample = computed(() => props.targetSample);
 const renderJob = computed(() => props.renderJob);
 const keyboardOctave = computed(() => props.keyboardOctave);

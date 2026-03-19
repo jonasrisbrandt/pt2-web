@@ -1,6 +1,16 @@
 import { SYNTH_PARAM_INDEX, SYNTH_PRESETS, SYNTH_PARAMETERS, applyPresetToPatch, createInitialSynthSnapshot } from './synthConfig';
 import { buildRenderedSampleFromCapture, createWaveformPreview, stereoToMono, type CapturedPreviewAudio } from './synthAudioUtils';
-import type { SynthParamId, RenderJob, RenderedSample, SynthCommand, SynthEvent, SynthSnapshot } from './synthTypes';
+import type {
+  SynthParamId,
+  RenderJob,
+  RenderedSample,
+  SynthCommand,
+  SynthEvent,
+  SynthSnapshot,
+  SynthTelemetryCurveId,
+  SynthTelemetrySnapshot,
+  SynthTelemetryTapId,
+} from './synthTypes';
 import type { SynthEngine } from './synthEngine';
 import { SynthPreviewDriver } from './synthPreviewDriver';
 
@@ -11,12 +21,45 @@ type SynthModule = {
 };
 
 type SynthModuleFactory = (options: Record<string, unknown>) => Promise<SynthModule>;
+type EmscriptenInstantiateCallback = (instance: WebAssembly.Instance, module: WebAssembly.Module) => void;
 
 const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
 
+const TELEMETRY_HEADER_SIZE = 16;
+const TELEMETRY_POINTS = 96;
+const TELEMETRY_TAP_IDS: SynthTelemetryTapId[] = ['oscA', 'oscB', 'mix', 'filter', 'drive', 'amp', 'master'];
+const TELEMETRY_CURVE_IDS: SynthTelemetryCurveId[] = ['ampEnv', 'filterEnv', 'lfo', 'filterResponse'];
+const SYNTH_WASM_JS_URL = '/wasm-synth/synthcore.js';
+const SYNTH_WASM_BINARY_URL = '/wasm-synth/synthcore.wasm';
+
+const normalizeWasmImports = (imports: WebAssembly.Imports): WebAssembly.Imports => {
+  const normalized = { ...imports } as Record<string, unknown>;
+  const envModule = normalized.env;
+  const minifiedModule = normalized.a;
+
+  if (!envModule && minifiedModule) {
+    normalized.env = minifiedModule;
+  }
+
+  if (!minifiedModule && envModule) {
+    normalized.a = envModule;
+  }
+
+  return normalized as WebAssembly.Imports;
+};
+
+const fetchSynthWasmBinary = async (): Promise<ArrayBuffer> => {
+  const response = await fetch(SYNTH_WASM_BINARY_URL, { credentials: 'same-origin' });
+  if (!response.ok) {
+    throw new Error(`Unable to fetch synth wasm binary: ${response.status} ${response.statusText}`);
+  }
+
+  return response.arrayBuffer();
+};
+
 const loadSynthModuleFactory = async (): Promise<SynthModuleFactory> => {
   const dynamicImport = new Function('path', 'return import(path);') as (path: string) => Promise<{ default?: SynthModuleFactory }>;
-  const imported = await dynamicImport('/wasm-synth/synthcore.js');
+  const imported = await dynamicImport(SYNTH_WASM_JS_URL);
   const factory = imported.default as SynthModuleFactory | undefined;
   if (!factory) {
     throw new Error('The synth wasm module did not expose a default factory.');
@@ -31,11 +74,22 @@ export class WasmSynthEngine implements SynthEngine {
   private listeners = new Set<(event: SynthEvent) => void>();
   private previewDriver: SynthPreviewDriver | null = null;
   private recordedAudio: CapturedPreviewAudio | null = null;
+  private telemetry: SynthTelemetrySnapshot | null = null;
 
   async init(): Promise<void> {
     const factory = await loadSynthModuleFactory();
+    const wasmBinary = await fetchSynthWasmBinary();
+    const wasmBytes = new Uint8Array(wasmBinary);
     this.module = await factory({
       locateFile: (path: string) => `/wasm-synth/${path}`,
+      wasmBinary: wasmBytes,
+      instantiateWasm: (imports: WebAssembly.Imports, receiveInstance: EmscriptenInstantiateCallback) => {
+        const normalizedImports = normalizeWasmImports(imports);
+        const module = new WebAssembly.Module(wasmBinary);
+        const instance = new WebAssembly.Instance(module, normalizedImports);
+        receiveInstance(instance, module);
+        return instance.exports;
+      },
     });
 
     const booted = this.callNumber('pt2_synth_boot', [], []);
@@ -68,6 +122,7 @@ export class WasmSynthEngine implements SynthEngine {
       status: 'Sample Creator ready.',
     };
     this.pushFullPatchToModule();
+    this.refreshTelemetry();
     this.emitSnapshot();
   }
 
@@ -93,6 +148,7 @@ export class WasmSynthEngine implements SynthEngine {
         this.snapshot.recordedWaveform = null;
         this.callVoid('pt2_synth_set_synth', ['number'], [command.synth === 'acid303' ? 1 : 0]);
         this.pushFullPatchToModule();
+        this.refreshTelemetry();
         this.snapshot.status = `Loaded ${command.synth === 'acid303' ? 'Acid303' : 'CoreSub'}.`;
         break;
       }
@@ -101,6 +157,7 @@ export class WasmSynthEngine implements SynthEngine {
         this.snapshot.selectedPresetId = next.presetId;
         this.snapshot.patch = next.patch;
         this.pushFullPatchToModule();
+        this.refreshTelemetry();
         this.snapshot.status = `Preset ${SYNTH_PRESETS.find((preset) => preset.id === next.presetId)?.name ?? 'loaded'}.`;
         break;
       }
@@ -108,6 +165,7 @@ export class WasmSynthEngine implements SynthEngine {
         const value = clamp(command.value, SYNTH_PARAMETERS[command.id].min, SYNTH_PARAMETERS[command.id].max);
         this.snapshot.patch[command.id] = value;
         this.setModuleParameter(command.id, value);
+        this.refreshTelemetry();
         this.snapshot.status = `${SYNTH_PARAMETERS[command.id].label} updated.`;
         break;
       }
@@ -119,15 +177,18 @@ export class WasmSynthEngine implements SynthEngine {
           this.emitSnapshot();
         });
         this.callVoid('pt2_synth_note_on', ['number', 'number'], [command.midiNote, clamp(command.velocity ?? 1, 0.05, 1)]);
+        this.refreshTelemetry();
         this.snapshot.activeNotes = Array.from(new Set([...this.snapshot.activeNotes, command.midiNote])).sort((a, b) => a - b);
         this.snapshot.status = `Preview note ${command.midiNote} playing.`;
         break;
       case 'preview/note-off':
         this.callVoid('pt2_synth_note_off', ['number'], [command.midiNote]);
+        this.refreshTelemetry();
         this.snapshot.activeNotes = this.snapshot.activeNotes.filter((note) => note !== command.midiNote);
         break;
       case 'preview/panic':
         this.callVoid('pt2_synth_panic', [], []);
+        this.refreshTelemetry();
         this.snapshot.activeNotes = [];
         this.snapshot.status = 'Preview stopped.';
         void this.previewDriver?.suspend();
@@ -174,6 +235,10 @@ export class WasmSynthEngine implements SynthEngine {
 
   getSnapshot(): SynthSnapshot {
     return structuredClone(this.snapshot);
+  }
+
+  getTelemetry(): SynthTelemetrySnapshot | null {
+    return this.telemetry;
   }
 
   async renderSample(job: RenderJob): Promise<RenderedSample> {
@@ -224,6 +289,7 @@ export class WasmSynthEngine implements SynthEngine {
 
     this.snapshot.lastRender = rendered;
     this.snapshot.status = `Rendered ${rendered.name} from ${this.snapshot.selectedSynth === 'acid303' ? 'Acid303' : 'CoreSub'}.`;
+    this.refreshTelemetry();
     this.emitSnapshot();
     return rendered;
   }
@@ -264,6 +330,7 @@ export class WasmSynthEngine implements SynthEngine {
     for (const [id, value] of Object.entries(this.snapshot.patch) as Array<[SynthParamId, number]>) {
       this.setModuleParameter(id, value);
     }
+    this.refreshTelemetry();
   }
 
   private setModuleParameter(id: SynthParamId, value: number): void {
@@ -276,6 +343,7 @@ export class WasmSynthEngine implements SynthEngine {
   private renderPreviewFrames(frameCount: number, sampleRate: number): Float32Array {
     const module = this.requireModule();
     this.callVoid('pt2_synth_render_preview', ['number', 'number'], [frameCount, sampleRate]);
+    this.refreshTelemetry();
     const pointer = this.callNumber('pt2_synth_preview_buffer', [], []);
     const length = this.callNumber('pt2_synth_preview_buffer_length', [], []);
     const heapF32 = module.HEAPF32;
@@ -342,5 +410,53 @@ export class WasmSynthEngine implements SynthEngine {
     }
 
     return this.module;
+  }
+
+  private refreshTelemetry(): void {
+    const module = this.requireModule();
+    const pointer = this.callNumber('pt2_synth_telemetry_buffer', [], []);
+    const length = this.callNumber('pt2_synth_telemetry_buffer_length', [], []);
+    const heapF32 = module.HEAPF32;
+    if (!heapF32 || pointer <= 0 || length <= TELEMETRY_HEADER_SIZE) {
+      return;
+    }
+
+    const view = heapF32.slice(pointer >> 2, (pointer >> 2) + length);
+    const version = Math.round(view[0] ?? 0);
+    if (this.telemetry && this.telemetry.version === version) {
+      return;
+    }
+
+    let offset = TELEMETRY_HEADER_SIZE;
+    const taps = {} as Record<SynthTelemetryTapId, Float32Array>;
+    for (const id of TELEMETRY_TAP_IDS) {
+      taps[id] = view.slice(offset, offset + TELEMETRY_POINTS);
+      offset += TELEMETRY_POINTS;
+    }
+
+    const curves = {} as Record<SynthTelemetryCurveId, Float32Array>;
+    for (const id of TELEMETRY_CURVE_IDS) {
+      curves[id] = view.slice(offset, offset + TELEMETRY_POINTS);
+      offset += TELEMETRY_POINTS;
+    }
+
+    this.telemetry = {
+      version,
+      focusedMidiNote: (view[1] ?? 0) > 0 ? Math.round(view[1] ?? 0) : null,
+      activeVoiceCount: Math.max(0, Math.round(view[2] ?? 0)),
+      sampleRate: Math.max(0, Math.round(view[3] ?? 0)),
+      peak: Math.max(0, view[12] ?? 0),
+      runtime: {
+        cutoff: clamp(view[4] ?? 0, 0, 1),
+        resonance: clamp(view[5] ?? 0, 0, 1),
+        ampEnv: clamp(view[6] ?? 0, 0, 1),
+        filterEnv: clamp(view[7] ?? 0, 0, 1),
+        lfo: clamp(view[8] ?? 0, -1, 1),
+        drive: clamp(view[9] ?? 0, 0, 1),
+        velocity: clamp(view[10] ?? 0, 0, 1),
+      },
+      taps,
+      curves,
+    };
   }
 }

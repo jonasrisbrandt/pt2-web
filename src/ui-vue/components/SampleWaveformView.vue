@@ -59,6 +59,10 @@ const CENTER_Y = HEIGHT / 2;
 const waveformValues = computed(() => Array.from(props.values));
 
 const linePoints = computed(() => {
+  if (waveformValues.value.length === 0) {
+    return '';
+  }
+
   const stepX = waveformValues.value.length > 1 ? WIDTH / (waveformValues.value.length - 1) : WIDTH;
   return waveformValues.value
     .map((value, index) => {
@@ -70,6 +74,10 @@ const linePoints = computed(() => {
 });
 
 const areaPath = computed(() => {
+  if (waveformValues.value.length === 0) {
+    return `M 0 ${CENTER_Y.toFixed(2)} L ${WIDTH} ${CENTER_Y.toFixed(2)} L ${WIDTH} ${CENTER_Y.toFixed(2)} L 0 ${CENTER_Y.toFixed(2)} Z`;
+  }
+
   const stepX = waveformValues.value.length > 1 ? WIDTH / (waveformValues.value.length - 1) : WIDTH;
   return waveformValues.value
     .map((value, index) => {

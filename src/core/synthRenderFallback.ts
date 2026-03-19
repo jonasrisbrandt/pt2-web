@@ -1,8 +1,16 @@
-import type { RenderJob, RenderedSample, SynthSnapshot } from './synthTypes';
+import type {
+  RenderJob,
+  RenderedSample,
+  SynthSnapshot,
+  SynthTelemetryCurveId,
+  SynthTelemetrySnapshot,
+  SynthTelemetryTapId,
+} from './synthTypes';
 
 const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
 const midiToFreq = (note: number): number => 440 * (2 ** ((note - 69) / 12));
 const TAU = Math.PI * 2;
+const TELEMETRY_POINTS = 96;
 
 const oscillator = (phase: number, waveform: number, pulseWidth: number): number => {
   switch (waveform) {
@@ -220,4 +228,86 @@ export const renderSynthPreviewFallback = (
   }
 
   return result;
+};
+
+export const buildSynthTelemetryFallback = (
+  snapshot: SynthSnapshot,
+  sampleRate: number,
+  midiNote: number | null,
+  version: number,
+): SynthTelemetrySnapshot => {
+  const note = midiNote ?? snapshot.activeNotes[0] ?? 48;
+  const rendered = renderSynthSampleFallback(snapshot, {
+    midiNote: note,
+    velocity: 1,
+    durationSeconds: TELEMETRY_POINTS / Math.max(1, sampleRate),
+    tailSeconds: 0,
+    sampleRate: Math.max(8000, sampleRate),
+    normalize: false,
+    fadeOut: false,
+    targetSlot: snapshot.targetSampleSlot,
+    sampleName: 'telemetry',
+    volume: 64,
+    fineTune: 0,
+    loopStart: 0,
+    loopLength: 2,
+  });
+
+  const signal = new Float32Array(TELEMETRY_POINTS);
+  for (let index = 0; index < TELEMETRY_POINTS; index += 1) {
+    signal[index] = (rendered.data[index] ?? 0) / 127;
+  }
+
+  const waveform = Math.round(snapshot.patch.waveform);
+  const taps = {
+    oscA: signal.slice(),
+    oscB: signal.map((value, index) => value * (waveform === 2 ? 0.72 : (0.65 + ((index / TELEMETRY_POINTS) * 0.1)))),
+    mix: signal.map((value) => value * 0.82),
+    filter: signal.map((value) => value * (0.35 + (snapshot.patch.filterCutoff * 0.65))),
+    drive: signal.map((value) => Math.tanh(value * (1 + (snapshot.patch.drive * 4)))),
+    amp: signal.map((value) => value * snapshot.patch.masterGain),
+    master: signal.slice(),
+  } satisfies Record<SynthTelemetryTapId, Float32Array>;
+
+  const curves = {} as Record<SynthTelemetryCurveId, Float32Array>;
+  curves.ampEnv = new Float32Array(TELEMETRY_POINTS);
+  curves.filterEnv = new Float32Array(TELEMETRY_POINTS);
+  curves.lfo = new Float32Array(TELEMETRY_POINTS);
+  curves.filterResponse = new Float32Array(TELEMETRY_POINTS);
+
+  for (let index = 0; index < TELEMETRY_POINTS; index += 1) {
+    const t = index / Math.max(1, TELEMETRY_POINTS - 1);
+    const ampEnv = t < 0.18
+      ? (t / 0.18)
+      : (1 - ((1 - snapshot.patch.ampSustain) * Math.min(1, (t - 0.18) / 0.28)));
+    curves.ampEnv[index] = clamp(ampEnv, 0, 1);
+    curves.filterEnv[index] = clamp(0.5 + (((curves.ampEnv[index] * 2) - 1) * snapshot.patch.filterEnvAmount * 0.5), 0, 1);
+    curves.lfo[index] = Math.sin(t * TAU) * snapshot.patch.lfoAmount;
+    const rolloff = Math.pow(t, 1.25) * (1 - snapshot.patch.filterCutoff);
+    curves.filterResponse[index] = clamp((1 - rolloff) * (0.65 + ((1 - snapshot.patch.filterResonance) * 0.2)), 0, 1);
+  }
+
+  let peak = 0;
+  for (const value of taps.master) {
+    peak = Math.max(peak, Math.abs(value));
+  }
+
+  return {
+    version,
+    focusedMidiNote: note,
+    activeVoiceCount: Math.max(0, snapshot.activeNotes.length),
+    sampleRate,
+    peak,
+    runtime: {
+      cutoff: clamp(snapshot.patch.filterCutoff, 0, 1),
+      resonance: clamp(snapshot.patch.filterResonance, 0, 1),
+      ampEnv: curves.ampEnv[TELEMETRY_POINTS - 1] ?? 0,
+      filterEnv: curves.filterEnv[TELEMETRY_POINTS - 1] ?? 0,
+      lfo: curves.lfo[Math.floor(TELEMETRY_POINTS / 4)] ?? 0,
+      drive: clamp(snapshot.patch.drive, 0, 1),
+      velocity: 1,
+    },
+    taps,
+    curves,
+  };
 };

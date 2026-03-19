@@ -31,6 +31,42 @@ export type SynthParamId =
   | 'slideTime'
   | 'pulseWidth';
 
+export type SynthTelemetryTapId =
+  | 'oscA'
+  | 'oscB'
+  | 'mix'
+  | 'filter'
+  | 'drive'
+  | 'amp'
+  | 'master';
+
+export type SynthTelemetryCurveId =
+  | 'ampEnv'
+  | 'filterEnv'
+  | 'lfo'
+  | 'filterResponse';
+
+export interface SynthTelemetryRuntime {
+  cutoff: number;
+  resonance: number;
+  ampEnv: number;
+  filterEnv: number;
+  lfo: number;
+  drive: number;
+  velocity: number;
+}
+
+export interface SynthTelemetrySnapshot {
+  version: number;
+  focusedMidiNote: number | null;
+  activeVoiceCount: number;
+  sampleRate: number;
+  peak: number;
+  runtime: SynthTelemetryRuntime;
+  taps: Record<SynthTelemetryTapId, Float32Array>;
+  curves: Record<SynthTelemetryCurveId, Float32Array>;
+}
+
 export interface SynthParameterDefinition {
   id: SynthParamId;
   label: string;

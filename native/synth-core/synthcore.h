@@ -15,3 +15,5 @@ int32_t pt2_synth_preview_buffer_length(void);
 void pt2_synth_render_sample(int32_t midiNote, float velocity, float durationSeconds, float tailSeconds, int32_t sampleRate, int32_t normalize, int32_t fadeOut);
 const int8_t *pt2_synth_sample_buffer(void);
 int32_t pt2_synth_sample_buffer_length(void);
+const float *pt2_synth_telemetry_buffer(void);
+int32_t pt2_synth_telemetry_buffer_length(void);

@@ -1,7 +1,7 @@
 import type { SampleSlot } from '../../core/trackerTypes';
 import type { SelectedSamplePanelRenderOptions } from './markupRenderer';
 import type { InlineNameFieldRenderOptions } from './viewModels';
-import type { RenderJob, SynthSnapshot } from '../../core/synthTypes';
+import type { RenderJob, SynthSnapshot, SynthTelemetrySnapshot } from '../../core/synthTypes';
 
 export interface SampleBankRenderItem {
   sample: SampleSlot;
@@ -78,6 +78,7 @@ export interface ClassicDebugRenderOptions {
 
 export interface SampleCreatorRenderOptions {
   snapshot: SynthSnapshot | null;
+  telemetry: SynthTelemetrySnapshot | null;
   targetSample: SampleSlot | null;
   keyboardOctave: number;
   renderJob: RenderJob;
