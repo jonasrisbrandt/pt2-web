@@ -205,11 +205,17 @@
     <div class="sample-creator-piano-card sample-creator-card">
       <div class="sample-creator-card__head">
         <p class="metric-label">Keyboard and piano</p>
-        <span class="hint">Octave {{ keyboardOctave }} | Live preview uses note-on/note-off.</span>
+        <span class="hint">Keyboard octave {{ keyboardOctave }} | Visible range {{ pianoRangeLabel }}</span>
       </div>
       <SampleCreatorPianoView
-        :base-midi="baseMidi"
+        :start-absolute="pianoStartAbsolute"
+        :end-absolute="pianoEndAbsolute"
+        :range-label="pianoRangeLabel"
+        :can-shift-down="pianoCanShiftDown"
+        :can-shift-up="pianoCanShiftUp"
         :active-notes="activeNotes"
+        :flash-note="pianoFlashNote"
+        :flash-token="pianoFlashToken"
       />
     </div>
 
@@ -285,6 +291,13 @@ const telemetry = computed(() => props.telemetry);
 const targetSample = computed(() => props.targetSample);
 const renderJob = computed(() => props.renderJob);
 const keyboardOctave = computed(() => props.keyboardOctave);
+const pianoStartAbsolute = computed(() => props.pianoStartAbsolute);
+const pianoEndAbsolute = computed(() => props.pianoEndAbsolute);
+const pianoRangeLabel = computed(() => props.pianoRangeLabel);
+const pianoCanShiftDown = computed(() => props.pianoCanShiftDown);
+const pianoCanShiftUp = computed(() => props.pianoCanShiftUp);
+const pianoFlashNote = computed(() => props.pianoFlashNote);
+const pianoFlashToken = computed(() => props.pianoFlashToken);
 
 const definition = computed(() => SYNTH_DEFINITIONS[snapshot.value?.selectedSynth ?? 'core-sub']);
 const presets = computed(() => SYNTH_PRESETS.filter((preset) => preset.synth === (snapshot.value?.selectedSynth ?? 'core-sub')));
@@ -301,9 +314,6 @@ const targetSampleLabel = computed(() => `${targetSlotNumber.value} ${targetSamp
 const backendLabel = computed(() => {
   if (!snapshot.value) {
     return 'Unavailable';
-  }
-  if (snapshot.value.backend === 'mock') {
-    return 'JS fallback (debug)';
   }
   if (snapshot.value.backend === 'wasm') {
     return 'Wasm core';
@@ -329,7 +339,6 @@ const bakeRateOptions = [
   { value: 11025, label: '11.025 kHz' },
 ];
 const recordActionLabel = computed(() => snapshot.value?.recordState === 'recording' ? 'Stop record' : 'Start record');
-const baseMidi = computed(() => 36 + (keyboardOctave.value * 12));
 const activeNotes = computed(() => new Set(snapshot.value?.activeNotes ?? []));
 const lastRenderName = computed(() => snapshot.value?.lastRender?.name ?? 'No rendered sample yet');
 const lastRenderSummary = computed(() => snapshot.value?.lastRender

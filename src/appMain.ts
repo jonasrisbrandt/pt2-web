@@ -112,6 +112,7 @@ import {
   syncPianoNotes as syncModernPianoNotes,
   triggerPianoGlow as triggerModernPianoGlow,
 } from './ui-modern/components/visualizationRenderer';
+import { resolvePianoKeyFromCanvasPointer } from './ui/pianoCanvasShared';
 import { createTrackerAppDom } from './ui-modern/session/appDom';
 import { uiPerfMonitor } from './perf/uiPerfMonitor';
 import { TrackerSignalTrailsFrameSource, TrackerSpectrumFrameSource } from './visualization-adapters/trackerVisualizationAdapter';
@@ -128,6 +129,11 @@ const PATTERN_GUTTER = 10;
 const PATTERN_ROW_INDEX_WIDTH = 54;
 const PATTERN_MIN_CHANNEL_WIDTH = 150;
 const QUADRASCOPE_HEIGHT = 220;
+const SAMPLE_CREATOR_PIANO_RANGES = [
+  { startAbsolute: 12, endAbsolute: 71, label: 'C1-B5' },
+  { startAbsolute: 24, endAbsolute: 83, label: 'C2-B6' },
+  { startAbsolute: 36, endAbsolute: 95, label: 'C3-B7' },
+] as const;
 const SPECTRUM_HEIGHT = 220;
 const PIANO_HEIGHT = QUADRASCOPE_HEIGHT;
 const SAMPLE_PREVIEW_HEIGHT = 182;
@@ -280,6 +286,9 @@ export class TrackerApplication {
     loopStart: 0,
     loopLength: 2,
   };
+  private sampleCreatorPianoRangeIndex = 1;
+  private sampleCreatorPianoFlashNote: number | null = null;
+  private sampleCreatorPianoFlashToken = 0;
   private collapsedSections: Record<SectionKey, boolean> = {
     module: false,
     visualization: false,
@@ -470,9 +479,7 @@ export class TrackerApplication {
       this.statusMessage = `Fell back to the mock engine: ${initResult.trackerWarning}`;
     }
     if (initResult.synthWarning && this.synthSnapshot) {
-      this.synthSnapshot.status = this.synthSnapshot.backend === 'mock'
-        ? `Debug fallback active: ${initResult.synthWarning}`
-        : initResult.synthWarning;
+      this.synthSnapshot.status = initResult.synthWarning;
     }
     this.preferredTransportMode = this.snapshot.transport.mode;
     if (this.engine && this.snapshot.editor.editMode !== !this.snapshot.transport.playing) {
@@ -1807,6 +1814,23 @@ export class TrackerApplication {
     });
   }
 
+  private getSampleCreatorPianoRange(): (typeof SAMPLE_CREATOR_PIANO_RANGES)[number] {
+    return SAMPLE_CREATOR_PIANO_RANGES[this.sampleCreatorPianoRangeIndex] ?? SAMPLE_CREATOR_PIANO_RANGES[1];
+  }
+
+  private flashSampleCreatorPiano(midiNote: number): void {
+    this.sampleCreatorPianoFlashNote = midiNote;
+    this.sampleCreatorPianoFlashToken += 1;
+  }
+
+  private shiftSampleCreatorPianoRange(direction: -1 | 1): void {
+    this.sampleCreatorPianoRangeIndex = clamp(
+      this.sampleCreatorPianoRangeIndex + direction,
+      0,
+      SAMPLE_CREATOR_PIANO_RANGES.length - 1,
+    );
+  }
+
   private getSampleCreatorOptions(snapshot: TrackerSnapshot): SampleCreatorRenderOptions | null {
     if (!featureFlags.sample_composer) {
       return null;
@@ -1816,6 +1840,7 @@ export class TrackerApplication {
     const targetSample = synthSnapshot
       ? (snapshot.samples[synthSnapshot.targetSampleSlot] ?? snapshot.samples[snapshot.selectedSample])
       : null;
+    const pianoRange = this.getSampleCreatorPianoRange();
 
     return {
       snapshot: synthSnapshot,
@@ -1823,6 +1848,13 @@ export class TrackerApplication {
       targetSample,
       keyboardOctave: this.keyboardOctave,
       renderJob: this.sampleCreatorState,
+      pianoStartAbsolute: pianoRange.startAbsolute,
+      pianoEndAbsolute: pianoRange.endAbsolute,
+      pianoRangeLabel: pianoRange.label,
+      pianoCanShiftDown: this.sampleCreatorPianoRangeIndex > 0,
+      pianoCanShiftUp: this.sampleCreatorPianoRangeIndex < SAMPLE_CREATOR_PIANO_RANGES.length - 1,
+      pianoFlashNote: this.sampleCreatorPianoFlashNote,
+      pianoFlashToken: this.sampleCreatorPianoFlashToken,
     };
   }
 
@@ -1945,6 +1977,14 @@ export class TrackerApplication {
           this.sampleCreatorState.sampleName = synth.slice(0, 22);
           return;
         }
+        case 'sample-creator-piano-range-down':
+          this.shiftSampleCreatorPianoRange(-1);
+          this.render();
+          return;
+        case 'sample-creator-piano-range-up':
+          this.shiftSampleCreatorPianoRange(1);
+          this.render();
+          return;
         case 'sample-creator-preview-note':
           if (this.synthSnapshot.inputArm === 'tracker') {
             this.recordTrackerMidiNote(this.sampleCreatorState.midiNote, this.sampleCreatorState.velocity);
@@ -1966,8 +2006,6 @@ export class TrackerApplication {
           return;
         case 'sample-creator-bake':
           await this.bakeSampleCreatorSample();
-          return;
-        case 'sample-creator-piano-note':
           return;
       }
     }
@@ -2232,16 +2270,22 @@ export class TrackerApplication {
 
   private handleWindowPointerDown(event: MouseEvent): void {
     const target = event.target instanceof Element ? event.target : null;
-    const sampleCreatorPianoTarget = target?.closest('[data-action="sample-creator-piano-note"]') as HTMLElement | null;
-    if (featureFlags.sample_composer && sampleCreatorPianoTarget && this.workspaceMode === 'sample-creator' && this.synthEngine && this.synthSnapshot) {
-      const midiNote = Number(sampleCreatorPianoTarget.dataset.midi);
-      if (Number.isFinite(midiNote)) {
+    const sampleCreatorPianoCanvas = target?.closest('[data-role="sample-creator-piano-canvas"]') as HTMLCanvasElement | null;
+    if (featureFlags.sample_composer && sampleCreatorPianoCanvas && this.workspaceMode === 'sample-creator' && this.synthEngine && this.synthSnapshot) {
+      const pianoRange = this.getSampleCreatorPianoRange();
+      const key = resolvePianoKeyFromCanvasPointer(
+        event,
+        sampleCreatorPianoCanvas,
+        pianoRange.startAbsolute,
+        pianoRange.endAbsolute,
+      );
+      if (key) {
         event.preventDefault();
-        this.sampleCreatorPointerNote = midiNote;
+        this.sampleCreatorPointerNote = key.absolute;
         if (this.synthSnapshot.inputArm === 'tracker') {
-          this.recordTrackerMidiNote(midiNote, this.sampleCreatorState.velocity);
+          this.recordTrackerMidiNote(key.absolute, this.sampleCreatorState.velocity);
         } else {
-          void this.playSynthMidiNote(midiNote, this.sampleCreatorState.velocity);
+          void this.playSynthMidiNote(key.absolute, this.sampleCreatorState.velocity);
         }
       }
       return;
@@ -2352,6 +2396,8 @@ export class TrackerApplication {
     }
 
     try {
+      this.flashSampleCreatorPiano(this.sampleCreatorState.midiNote);
+      this.render();
       await this.synthRenderedPreview.prepare();
       const rendered = await this.synthEngine.renderSample({
         ...this.sampleCreatorState,
@@ -2387,6 +2433,7 @@ export class TrackerApplication {
     const absolute = noteToAbsolute(note);
     if (absolute !== null) {
       this.triggerPianoGlow(channel, absolute);
+      this.flashSampleCreatorPiano(absolute);
     }
     this.snapshot = this.engine.getSnapshot();
     this.moveModernCursor(this.snapshot.cursor.row + 1, channel, 'note');

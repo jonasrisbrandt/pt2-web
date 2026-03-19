@@ -82,6 +82,13 @@ export interface SampleCreatorRenderOptions {
   targetSample: SampleSlot | null;
   keyboardOctave: number;
   renderJob: RenderJob;
+  pianoStartAbsolute: number;
+  pianoEndAbsolute: number;
+  pianoRangeLabel: string;
+  pianoCanShiftDown: boolean;
+  pianoCanShiftUp: boolean;
+  pianoFlashNote: number | null;
+  pianoFlashToken: number;
 }
 
 export interface AppShellRenderOptions {

@@ -1,7 +1,7 @@
 import type { ImportedSample } from './trackerTypes';
 
-export type SynthBackend = 'wasm' | 'mock' | 'unavailable';
-export type SynthBackendStatus = 'ready' | 'debug-fallback' | 'error';
+export type SynthBackend = 'wasm' | 'unavailable';
+export type SynthBackendStatus = 'ready' | 'error';
 export type SynthId = 'core-sub' | 'acid303';
 export type InputArmTarget = 'tracker' | 'synth';
 export type SynthRecordState = 'idle' | 'recording' | 'captured';

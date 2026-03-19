@@ -16,16 +16,21 @@ if (-not (Test-Path (Join-Path $nativeRoot 'synthcore.c'))) {
 
 New-Item -ItemType Directory -Force $outDir | Out-Null
 
-Push-Location $projectRoot
-try {
+function Invoke-SynthEmccBuild {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$OptimizationLevel
+  )
+
   $outputJs = 'public/wasm-synth/synthcore.js'
   $sourceFiles = Get-ChildItem 'native/synth-core' -Filter '*.c' | Sort-Object Name | ForEach-Object {
     (Join-Path 'native/synth-core' $_.Name).Replace('\', '/')
   }
+
   $emccArgs = @()
   $emccArgs += $sourceFiles
   $emccArgs += @(
-    '-O3'
+    $OptimizationLevel
     '-sALLOW_MEMORY_GROWTH=1'
     '-sSTACK_SIZE=1048576'
     '-sMODULARIZE=1'
@@ -39,11 +44,54 @@ try {
     $outputJs
   )
 
-  & emcc @emccArgs
+  $buildOutput = & emcc @emccArgs 2>&1
+  $exitCode = $LASTEXITCODE
 
-  if ($LASTEXITCODE -ne 0) {
+  foreach ($line in $buildOutput) {
+    Write-Host $line
+  }
+
+  return [PSCustomObject]@{
+    ExitCode = $exitCode
+    Output = ($buildOutput -join [Environment]::NewLine)
+    OptimizationLevel = $OptimizationLevel
+  }
+}
+
+function Test-IsBinaryenPolicyBlock {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$BuildOutput
+  )
+
+  return $BuildOutput -match 'wasm-opt' -and (
+    $BuildOutput -match 'WinError 4551' -or
+    $BuildOutput -match 'is blocked by policy' -or
+    $BuildOutput -match 'The file cannot be accessed by the system'
+  )
+}
+
+Push-Location $projectRoot
+try {
+  $preferredBuild = Invoke-SynthEmccBuild -OptimizationLevel '-O3'
+
+  if ($preferredBuild.ExitCode -eq 0) {
+    Write-Host 'Synth wasm build completed with release optimization (-O3).'
+    return
+  }
+
+  if (-not (Test-IsBinaryenPolicyBlock -BuildOutput $preferredBuild.Output)) {
     throw 'The synth emcc build failed.'
   }
+
+  Write-Warning 'Binaryen post-link optimization was blocked by local policy. Retrying synth wasm build with -O1 to produce usable synced wasm artifacts.'
+  $fallbackBuild = Invoke-SynthEmccBuild -OptimizationLevel '-O1'
+
+  if ($fallbackBuild.ExitCode -ne 0) {
+    throw 'The synth emcc build failed.'
+  }
+
+  Write-Warning 'Synth wasm build completed with fallback optimization (-O1). Release-level Binaryen optimization is still unavailable on this machine.'
 } finally {
   Pop-Location
 }

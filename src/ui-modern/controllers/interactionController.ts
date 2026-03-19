@@ -1,7 +1,8 @@
 import type { CursorField, PatternCell, TrackerSnapshot } from '../../core/trackerTypes';
-import { buildPianoKeys, clamp, CURSOR_FIELDS, type PianoKey } from '../../ui/appShared';
+import { clamp, CURSOR_FIELDS, PIANO_END_ABSOLUTE, PIANO_START_ABSOLUTE, type PianoKey } from '../../ui/appShared';
 import { formatCellParam, formatCellSample } from '../../ui/formatters';
 import type { TrackerEngine } from '../../core/trackerEngine';
+import { resolvePianoKeyFromCanvasPointer } from '../../ui/pianoCanvasShared';
 
 export const handleModernHexEntry = (
   event: KeyboardEvent,
@@ -164,28 +165,12 @@ export const resolvePianoKeyFromPointer = (
   event: MouseEvent,
   canvas: HTMLCanvasElement,
 ): PianoKey | null => {
-  const rect = canvas.getBoundingClientRect();
-  if (rect.width <= 0 || rect.height <= 0) {
-    return null;
-  }
-
-  const x = event.clientX - rect.left;
-  const y = event.clientY - rect.top;
-  const padding = 16;
-  const keyboardTop = 14;
-  const keyboardHeight = rect.height - 28;
-  const localX = x - padding;
-  const keys = buildPianoKeys(Math.max(1, rect.width - (padding * 2)));
-  const blackHeight = keyboardHeight * 0.66;
-
-  const blackKey = keys
-    .filter((key) => key.black)
-    .find((key) => localX >= key.x && localX <= key.x + key.width && y >= keyboardTop && y <= keyboardTop + blackHeight);
-  const whiteKey = keys
-    .filter((key) => !key.black)
-    .find((key) => localX >= key.x && localX <= key.x + key.width && y >= keyboardTop && y <= keyboardTop + keyboardHeight);
-
-  return blackKey ?? whiteKey ?? null;
+  return resolvePianoKeyFromCanvasPointer(
+    event,
+    canvas,
+    PIANO_START_ABSOLUTE,
+    PIANO_END_ABSOLUTE,
+  );
 };
 
 export const handlePianoPointer = ({

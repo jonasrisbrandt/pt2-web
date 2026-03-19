@@ -3,6 +3,11 @@
 
 #include "synth_engine.h"
 
+static float pt2_exp_interp(float low, float high, float t)
+{
+	return low * powf(high / low, pt2_clamp_float(t, 0.0f, 1.0f));
+}
+
 static bool pt2_param_is_smoothed(int32_t param_id)
 {
 	return param_id != PT2_PARAM_WAVEFORM && param_id != PT2_PARAM_ACCENT;
@@ -13,6 +18,15 @@ static void pt2_voice_reset(pt2SynthVoice_t *voice)
 	memset(voice, 0, sizeof (*voice));
 	pt2_env_reset(&voice->ampEnv);
 	pt2_svf_reset(&voice->filter);
+	pt2_decay_env_reset(&voice->acidMainEnv);
+	pt2_acid_filter_reset(&voice->acidFilter);
+	pt2_onepole_reset(&voice->acidEnvShape1);
+	pt2_onepole_reset(&voice->acidEnvShape2);
+	pt2_onepole_reset(&voice->acidPreHighpass);
+	pt2_onepole_reset(&voice->acidPostHighpass);
+	pt2_onepole_reset(&voice->acidAllpass);
+	pt2_onepole_reset(&voice->acidAmpSmoother);
+	pt2_biquad_reset(&voice->acidNotch);
 }
 
 static void pt2_clear_fx_state(pt2SynthEngine_t *engine)
@@ -33,8 +47,13 @@ static void pt2_panic_voices(pt2SynthEngine_t *engine)
 {
 	int32_t i;
 	for (i = 0; i < PT2_SYNTH_MAX_VOICES; ++i)
+	{
 		pt2_voice_reset(&engine->voices[i]);
+		engine->acidHeldNotes[i] = -1;
+		engine->acidHeldVelocities[i] = 0.0f;
+	}
 
+	engine->acidHeldCount = 0;
 	engine->focusedVoiceIndex = 0;
 }
 
@@ -78,7 +97,23 @@ static float pt2_map_cutoff_hz(float normalized_cutoff, float sample_rate)
 {
 	const float minimum_hz = 20.0f;
 	const float maximum_hz = pt2_clamp_float(sample_rate * 0.45f, 4000.0f, 18000.0f);
-	return minimum_hz * powf(maximum_hz / minimum_hz, pt2_clamp_float(normalized_cutoff, 0.0f, 1.0f));
+	return pt2_exp_interp(minimum_hz, maximum_hz, normalized_cutoff);
+}
+
+static float pt2_map_acid_cutoff_hz(float normalized_cutoff)
+{
+	return pt2_exp_interp(314.0f, 2394.0f, normalized_cutoff);
+}
+
+static void pt2_get_acid_env_mapping(float cutoff_norm, float env_amount, float *env_scaler, float *env_offset)
+{
+	const float e = pt2_clamp_float(env_amount, 0.0f, 1.0f);
+	const float c = pt2_clamp_float(cutoff_norm, 0.0f, 1.0f);
+	const float s_lo = (3.7739964f * e) + 0.7369656f;
+	const float s_hi = (4.1945486f * e) + 0.8643449f;
+
+	*env_scaler = ((1.0f - c) * s_lo) + (c * s_hi);
+	*env_offset = (0.04829293f * c) + 0.2943912f;
 }
 
 static float pt2_get_param(pt2SynthEngine_t *engine, int32_t param_id)
@@ -109,6 +144,127 @@ static void pt2_capture_taps(
 	engine->tapWritePos = (engine->tapWritePos + 1) % PT2_SYNTH_TELEMETRY_POINTS;
 }
 
+static void pt2_acid_push_note(pt2SynthEngine_t *engine, int32_t midi_note, float velocity)
+{
+	int32_t i;
+
+	for (i = 0; i < engine->acidHeldCount; ++i)
+	{
+		if (engine->acidHeldNotes[i] == midi_note)
+		{
+			int32_t j;
+			for (j = i; j > 0; --j)
+			{
+				engine->acidHeldNotes[j] = engine->acidHeldNotes[j - 1];
+				engine->acidHeldVelocities[j] = engine->acidHeldVelocities[j - 1];
+			}
+
+			engine->acidHeldNotes[0] = midi_note;
+			engine->acidHeldVelocities[0] = velocity;
+			return;
+		}
+	}
+
+	if (engine->acidHeldCount < PT2_SYNTH_MAX_VOICES)
+		++engine->acidHeldCount;
+
+	for (i = engine->acidHeldCount - 1; i > 0; --i)
+	{
+		engine->acidHeldNotes[i] = engine->acidHeldNotes[i - 1];
+		engine->acidHeldVelocities[i] = engine->acidHeldVelocities[i - 1];
+	}
+
+	engine->acidHeldNotes[0] = midi_note;
+	engine->acidHeldVelocities[0] = velocity;
+}
+
+static void pt2_acid_remove_note(pt2SynthEngine_t *engine, int32_t midi_note)
+{
+	int32_t i;
+
+	for (i = 0; i < engine->acidHeldCount; ++i)
+	{
+		if (engine->acidHeldNotes[i] == midi_note)
+		{
+			int32_t j;
+			for (j = i; j < engine->acidHeldCount - 1; ++j)
+			{
+				engine->acidHeldNotes[j] = engine->acidHeldNotes[j + 1];
+				engine->acidHeldVelocities[j] = engine->acidHeldVelocities[j + 1];
+			}
+
+			--engine->acidHeldCount;
+			engine->acidHeldNotes[engine->acidHeldCount] = -1;
+			engine->acidHeldVelocities[engine->acidHeldCount] = 0.0f;
+			return;
+		}
+	}
+}
+
+static void pt2_acid_prepare_voice(pt2SynthVoice_t *voice, float sample_rate)
+{
+	const float oversampled_rate = sample_rate * 4.0f;
+
+	pt2_onepole_set_highpass(&voice->acidPreHighpass, 44.486f, oversampled_rate);
+	pt2_acid_filter_set_feedback_highpass(&voice->acidFilter, 150.0f, oversampled_rate);
+	pt2_onepole_set_highpass(&voice->acidPostHighpass, 24.167f, sample_rate);
+	pt2_onepole_set_allpass(&voice->acidAllpass, 14.008f, sample_rate);
+	pt2_onepole_set_lowpass(&voice->acidAmpSmoother, 200.0f, sample_rate);
+	pt2_biquad_set_notch(&voice->acidNotch, 7.5164f, 4.7f, sample_rate);
+}
+
+static void pt2_acid_trigger_note(pt2SynthEngine_t *engine, pt2SynthVoice_t *voice, int32_t midi_note, float velocity)
+{
+	const float sample_rate = pt2_clamp_float(engine->lastSampleRate, 22050.0f, 96000.0f);
+	const float accent = pt2_clamp_float(engine->params[PT2_PARAM_ACCENT], 0.0f, 1.0f);
+	const float base_decay_ms = pt2_clamp_float(engine->params[PT2_PARAM_AMP_DECAY], 0.02f, 2.5f) * 1000.0f;
+	const float base_release = pt2_clamp_float(engine->params[PT2_PARAM_AMP_RELEASE], 0.005f, 1.5f);
+
+	if (!voice->active && voice->ampEnv.stage == PT2_ENV_IDLE)
+	{
+		voice->phaseA = 0.0f;
+		pt2_acid_filter_reset(&voice->acidFilter);
+		pt2_onepole_reset(&voice->acidPreHighpass);
+		pt2_onepole_reset(&voice->acidPostHighpass);
+		pt2_onepole_reset(&voice->acidAllpass);
+		pt2_onepole_reset(&voice->acidEnvShape1);
+		pt2_onepole_reset(&voice->acidEnvShape2);
+		pt2_onepole_reset(&voice->acidAmpSmoother);
+		pt2_biquad_reset(&voice->acidNotch);
+	}
+
+	voice->active = true;
+	voice->held = true;
+	voice->acidLegato = false;
+	voice->midiNote = midi_note;
+	voice->velocity = velocity;
+	voice->currentFreq = pt2_midi_to_freq(midi_note);
+	voice->targetFreq = voice->currentFreq;
+	voice->acidAccent = accent;
+	voice->acidAmpRelease = base_release + (accent * 0.08f);
+
+	pt2_onepole_set_lowpass(&voice->acidEnvShape1, 53.0f, sample_rate);
+	pt2_onepole_set_lowpass(&voice->acidEnvShape2, 53.0f, sample_rate);
+	pt2_decay_env_trigger(&voice->acidMainEnv, base_decay_ms, sample_rate);
+	pt2_env_note_on(&voice->ampEnv);
+	pt2_acid_prepare_voice(voice, sample_rate);
+}
+
+static void pt2_acid_slide_to_note(pt2SynthEngine_t *engine, pt2SynthVoice_t *voice, int32_t midi_note, float velocity)
+{
+	const float accent = pt2_clamp_float(engine->params[PT2_PARAM_ACCENT], 0.0f, 1.0f);
+	const float base_release = pt2_clamp_float(engine->params[PT2_PARAM_AMP_RELEASE], 0.005f, 1.5f);
+
+	voice->active = true;
+	voice->held = true;
+	voice->acidLegato = true;
+	voice->midiNote = midi_note;
+	voice->velocity = velocity;
+	voice->targetFreq = pt2_midi_to_freq(midi_note);
+	voice->acidAccent = accent;
+	voice->acidAmpRelease = base_release + (accent * 0.08f);
+}
+
 static pt2SynthVoice_t *pt2_allocate_voice(pt2SynthEngine_t *engine, int32_t midi_note, float velocity)
 {
 	pt2SynthVoice_t *voice = NULL;
@@ -117,16 +273,14 @@ static pt2SynthVoice_t *pt2_allocate_voice(pt2SynthEngine_t *engine, int32_t mid
 	if (engine->selectedSynth == PT2_SYNTH_ACID303)
 	{
 		voice = &engine->voices[0];
-		if (voice->active && pt2_clamp_float(engine->params[PT2_PARAM_SLIDE_TIME], 0.0f, 1.5f) > 0.001f)
-		{
-			voice->targetFreq = pt2_midi_to_freq(midi_note);
-			voice->midiNote = midi_note;
-			voice->held = true;
-			voice->velocity = velocity;
-			pt2_env_note_on(&voice->ampEnv);
-			engine->focusedVoiceIndex = 0;
-			return voice;
-		}
+		pt2_acid_push_note(engine, midi_note, velocity);
+		if (voice->active && voice->held)
+			pt2_acid_slide_to_note(engine, voice, midi_note, velocity);
+		else
+			pt2_acid_trigger_note(engine, voice, midi_note, velocity);
+
+		engine->focusedVoiceIndex = 0;
+		return voice;
 	}
 	else
 	{
@@ -192,6 +346,107 @@ static float pt2_render_voice(
 
 	if (!voice->active)
 		return 0.0f;
+
+	if (engine->selectedSynth == PT2_SYNTH_ACID303)
+	{
+		const int32_t acid_oversample = 4;
+		const float oversampled_rate = sample_rate * (float)acid_oversample;
+		const float acid_attack = pt2_clamp_float(engine->params[PT2_PARAM_AMP_ATTACK], 0.0005f, 0.1f);
+		const float acid_decay = pt2_clamp_float(engine->params[PT2_PARAM_AMP_DECAY], 0.02f, 2.5f);
+		const float acid_sustain = pt2_clamp_float(engine->params[PT2_PARAM_AMP_SUSTAIN], 0.0f, 1.0f);
+		const float acid_release = pt2_clamp_float(voice->acidAmpRelease, 0.005f, 1.5f);
+		const float acid_cutoff_norm = pt2_clamp_float(pt2_get_param(engine, PT2_PARAM_FILTER_CUTOFF), 0.0f, 1.0f);
+		const float acid_resonance = pt2_clamp_float(pt2_get_param(engine, PT2_PARAM_FILTER_RESONANCE), 0.0f, 0.97f);
+		const float acid_env_amount = pt2_get_param(engine, PT2_PARAM_FILTER_ENV_AMOUNT);
+		const float acid_drive = pt2_clamp_float(pt2_get_param(engine, PT2_PARAM_DRIVE), 0.0f, 1.0f);
+		const float acid_slide = pt2_clamp_float(engine->params[PT2_PARAM_SLIDE_TIME], 0.0f, 0.8f);
+		const int32_t acid_waveform = pt2_clamp_int32((int32_t)lroundf(engine->params[PT2_PARAM_WAVEFORM]), 0, 2);
+		float acid_env_scaler = 1.0f;
+		float acid_env_offset = 0.0f;
+		float acid_main_env;
+		float acid_rc1;
+		float acid_rc2;
+		float acid_amp_env;
+		float acid_phase_inc;
+
+		pt2_acid_prepare_voice(voice, sample_rate);
+
+		if (acid_slide > 0.0f && fabsf(voice->targetFreq - voice->currentFreq) > 0.001f)
+		{
+			const float glide = 1.0f - expf(-1.0f / (sample_rate * ((acid_slide * 0.20f) + 0.001f)));
+			voice->currentFreq += (voice->targetFreq - voice->currentFreq) * glide;
+		}
+		else
+		{
+			voice->currentFreq = voice->targetFreq;
+		}
+
+		acid_amp_env = pt2_env_process(&voice->ampEnv, acid_attack, acid_decay, acid_sustain, acid_release, sample_rate);
+		if (voice->ampEnv.stage == PT2_ENV_IDLE)
+		{
+			voice->active = false;
+			voice->held = false;
+			return 0.0f;
+		}
+
+		acid_main_env = pt2_decay_env_process(&voice->acidMainEnv);
+		acid_rc1 = pt2_onepole_process(&voice->acidEnvShape1, acid_main_env);
+		acid_rc2 = pt2_onepole_process(&voice->acidEnvShape2, acid_main_env * voice->acidAccent);
+		pt2_get_acid_env_mapping(acid_cutoff_norm, fabsf(acid_env_amount), &acid_env_scaler, &acid_env_offset);
+		acid_phase_inc = voice->currentFreq / oversampled_rate;
+		accumulated = 0.0f;
+
+		for (step = 0; step < acid_oversample; ++step)
+		{
+			const float osc = (acid_waveform == 0)
+				? pt2_osc_saw303(voice->phaseA, acid_phase_inc)
+				: pt2_osc_square303(voice->phaseA, acid_phase_inc);
+			float env_octaves = acid_env_scaler * (acid_rc1 - acid_env_offset);
+			float accent_octaves = acid_rc2 * 0.90f;
+			float cutoff_hz;
+			float sample;
+
+			if (acid_env_amount < 0.0f)
+				env_octaves = -env_octaves;
+
+			cutoff_hz = pt2_map_acid_cutoff_hz(acid_cutoff_norm) * exp2f(env_octaves + accent_octaves);
+			cutoff_hz = pt2_clamp_float(cutoff_hz, 120.0f, oversampled_rate * 0.20f);
+
+			sample = tanhf(osc * (1.25f + (acid_drive * 2.75f)));
+			sample = pt2_onepole_process(&voice->acidPreHighpass, sample);
+			*focused_mix = sample;
+			sample = pt2_acid_filter_process(&voice->acidFilter, sample, cutoff_hz, acid_resonance, oversampled_rate);
+			accumulated += sample;
+
+			if (((int32_t)(voice - engine->voices)) == engine->focusedVoiceIndex)
+			{
+				*focused_osc_a = osc;
+				*focused_osc_b = 0.0f;
+				*focused_filter = sample;
+				*focused_drive = *focused_mix;
+			}
+
+			voice->phaseA += acid_phase_inc;
+			voice->phaseA -= floorf(voice->phaseA);
+		}
+
+		accumulated *= 0.25f;
+		accumulated = pt2_onepole_process(&voice->acidAllpass, accumulated);
+		accumulated = pt2_onepole_process(&voice->acidPostHighpass, accumulated);
+		accumulated = pt2_biquad_process(&voice->acidNotch, accumulated);
+
+		acid_amp_env += (0.45f * acid_main_env) + (voice->acidAccent * 4.0f * acid_main_env);
+		acid_amp_env = pt2_onepole_process(&voice->acidAmpSmoother, acid_amp_env);
+		accumulated *= acid_amp_env * (0.45f + (voice->velocity * 0.55f));
+
+		engine->lastCutoffNorm = acid_cutoff_norm;
+		engine->lastResonance = acid_resonance;
+		engine->lastAmpEnv = pt2_clamp_float(acid_amp_env, 0.0f, 1.0f);
+		engine->lastFilterEnv = pt2_clamp_float(0.5f + (acid_rc1 - acid_env_offset), 0.0f, 1.0f);
+		engine->lastDrive = acid_drive;
+		*focused_amp = accumulated;
+		return accumulated;
+	}
 
 	if (slide_time > 0.0f && fabsf(voice->targetFreq - voice->currentFreq) > 0.001f)
 	{
@@ -378,11 +633,11 @@ static void pt2_render_frames(pt2SynthEngine_t *engine, int32_t frames, float sa
 
 		engine->lastLfo = lfo_value;
 
-		for (voice_index = 0; voice_index < PT2_SYNTH_MAX_VOICES; ++voice_index)
+		if (engine->selectedSynth == PT2_SYNTH_ACID303)
 		{
-			dry += pt2_render_voice(
+			dry = pt2_render_voice(
 				engine,
-				&engine->voices[voice_index],
+				&engine->voices[0],
 				sample_rate,
 				lfo_value,
 				&focused_osc_a,
@@ -391,6 +646,23 @@ static void pt2_render_frames(pt2SynthEngine_t *engine, int32_t frames, float sa
 				&focused_filter,
 				&focused_drive,
 				&focused_amp);
+		}
+		else
+		{
+			for (voice_index = 0; voice_index < PT2_SYNTH_MAX_VOICES; ++voice_index)
+			{
+				dry += pt2_render_voice(
+					engine,
+					&engine->voices[voice_index],
+					sample_rate,
+					lfo_value,
+					&focused_osc_a,
+					&focused_osc_b,
+					&focused_mix,
+					&focused_filter,
+					&focused_drive,
+					&focused_amp);
+			}
 		}
 
 		pt2_apply_fx(engine, dry, sample_rate, &left, &right);
@@ -479,6 +751,25 @@ void pt2_synth_engine_note_on(pt2SynthEngine_t *engine, int32_t midi_note, float
 void pt2_synth_engine_note_off(pt2SynthEngine_t *engine, int32_t midi_note)
 {
 	int32_t i;
+
+	if (engine->selectedSynth == PT2_SYNTH_ACID303)
+	{
+		pt2SynthVoice_t *voice = &engine->voices[0];
+		pt2_acid_remove_note(engine, midi_note);
+		if (engine->acidHeldCount > 0)
+		{
+			pt2_acid_slide_to_note(engine, voice, engine->acidHeldNotes[0], engine->acidHeldVelocities[0]);
+		}
+		else if (voice->active)
+		{
+			voice->held = false;
+			pt2_env_note_off(&voice->ampEnv);
+		}
+
+		engine->telemetryVersion += 1u;
+		return;
+	}
+
 	for (i = 0; i < PT2_SYNTH_MAX_VOICES; ++i)
 	{
 		pt2SynthVoice_t *voice = &engine->voices[i];
@@ -486,8 +777,6 @@ void pt2_synth_engine_note_off(pt2SynthEngine_t *engine, int32_t midi_note)
 		{
 			voice->held = false;
 			pt2_env_note_off(&voice->ampEnv);
-			if (engine->selectedSynth == PT2_SYNTH_ACID303)
-				break;
 		}
 	}
 
@@ -649,7 +938,9 @@ void pt2_synth_engine_fill_telemetry(const pt2SynthEngine_t *engine, float *buff
 		const float lfo_amount = pt2_clamp_float(engine->params[PT2_PARAM_LFO_AMOUNT], 0.0f, 1.0f);
 		const float resonance = pt2_clamp_float(engine->lastResonance, 0.0f, 0.97f);
 		const float q = 0.55f + ((1.0f - resonance) * 15.0f);
-		const float cutoff_hz = pt2_map_cutoff_hz(engine->lastCutoffNorm, engine->lastSampleRate <= 1.0f ? 48000.0f : engine->lastSampleRate);
+		const float cutoff_hz = (engine->selectedSynth == PT2_SYNTH_ACID303)
+			? pt2_map_acid_cutoff_hz(engine->lastCutoffNorm)
+			: pt2_map_cutoff_hz(engine->lastCutoffNorm, engine->lastSampleRate <= 1.0f ? 48000.0f : engine->lastSampleRate);
 
 		for (point = 0; point < PT2_SYNTH_TELEMETRY_POINTS; ++point)
 		{

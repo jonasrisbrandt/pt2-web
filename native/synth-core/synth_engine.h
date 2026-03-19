@@ -67,6 +67,7 @@ typedef struct pt2SynthVoice_t
 {
 	bool active;
 	bool held;
+	bool acidLegato;
 	int32_t midiNote;
 	float velocity;
 	float currentFreq;
@@ -77,8 +78,19 @@ typedef struct pt2SynthVoice_t
 	float triStateA;
 	float triStateB;
 	float triStateSub;
+	float acidAccent;
+	float acidAmpRelease;
 	pt2Envelope_t ampEnv;
 	pt2SvfState_t filter;
+	pt2DecayEnv_t acidMainEnv;
+	pt2AcidFilterState_t acidFilter;
+	pt2OnePoleState_t acidEnvShape1;
+	pt2OnePoleState_t acidEnvShape2;
+	pt2OnePoleState_t acidPreHighpass;
+	pt2OnePoleState_t acidPostHighpass;
+	pt2OnePoleState_t acidAllpass;
+	pt2OnePoleState_t acidAmpSmoother;
+	pt2BiquadState_t acidNotch;
 } pt2SynthVoice_t;
 
 typedef struct pt2SynthEngine_t
@@ -115,6 +127,9 @@ typedef struct pt2SynthEngine_t
 	float tapHistory[PT2_SYNTH_TELEMETRY_TAP_COUNT][PT2_SYNTH_TELEMETRY_POINTS];
 	int32_t tapWritePos;
 	uint32_t telemetryVersion;
+	int32_t acidHeldNotes[PT2_SYNTH_MAX_VOICES];
+	float acidHeldVelocities[PT2_SYNTH_MAX_VOICES];
+	int32_t acidHeldCount;
 } pt2SynthEngine_t;
 
 void pt2_synth_engine_boot(pt2SynthEngine_t *engine);
