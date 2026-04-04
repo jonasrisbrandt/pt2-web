@@ -80,6 +80,7 @@ export interface SampleCreatorRenderOptions {
   snapshot: SynthSnapshot | null;
   telemetry: SynthTelemetrySnapshot | null;
   targetSample: SampleSlot | null;
+  sampleSlots: SampleSlot[];
   keyboardOctave: number;
   renderJob: RenderJob;
   pianoStartAbsolute: number;

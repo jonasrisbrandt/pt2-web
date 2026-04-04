@@ -3,6 +3,8 @@ import type { SynthId, SynthParamId, SynthParameterDefinition, SynthPreset, Synt
 const percent = (value: number): string => `${Math.round(value * 100)}%`;
 const seconds = (value: number): string => `${value.toFixed(value < 1 ? 2 : 1)} s`;
 const mix = (value: number): string => `${Math.round(value * 100)}%`;
+const toggleLabel = (value: number): string => value >= 0.5 ? 'On' : 'Off';
+const delayDivisionLabel = (value: number): string => ['1/16', '1/8', '1/8D', '1/4', '1/4D', '1/2'][Math.round(value)] ?? '1/4';
 
 export const SYNTH_PARAM_ORDER: SynthParamId[] = [
   'masterGain',
@@ -21,6 +23,8 @@ export const SYNTH_PARAM_ORDER: SynthParamId[] = [
   'detune',
   'lfoRate',
   'lfoAmount',
+  'delaySync',
+  'delayDivision',
   'delayTime',
   'delayFeedback',
   'delayMix',
@@ -45,13 +49,15 @@ export const SYNTH_PARAMETERS: Record<SynthParamId, SynthParameterDefinition> = 
   filterCutoff: { id: 'filterCutoff', label: 'Cutoff', min: 0.02, max: 0.98, step: 0.01, defaultValue: 0.68, section: 'filter', formatter: percent },
   filterResonance: { id: 'filterResonance', label: 'Reso', min: 0, max: 0.95, step: 0.01, defaultValue: 0.22, section: 'filter', formatter: percent },
   filterEnvAmount: { id: 'filterEnvAmount', label: 'Env Amt', min: -1, max: 1, step: 0.01, defaultValue: 0.28, section: 'filter', formatter: percent },
-  drive: { id: 'drive', label: 'Drive', min: 0, max: 1, step: 0.01, defaultValue: 0.18, section: 'filter', formatter: percent },
+  drive: { id: 'drive', label: 'Drive', min: 0, max: 1, step: 0.01, defaultValue: 0.18, section: 'fx', formatter: percent },
   oscMix: { id: 'oscMix', label: 'Osc Mix', min: 0, max: 1, step: 0.01, defaultValue: 0.72, section: 'oscillators', formatter: percent },
   subMix: { id: 'subMix', label: 'Sub', min: 0, max: 1, step: 0.01, defaultValue: 0.44, section: 'oscillators', formatter: percent },
   noiseMix: { id: 'noiseMix', label: 'Noise', min: 0, max: 1, step: 0.01, defaultValue: 0.06, section: 'oscillators', formatter: percent },
   detune: { id: 'detune', label: 'Detune', min: 0, max: 0.5, step: 0.01, defaultValue: 0.12, section: 'oscillators', formatter: (value) => value.toFixed(2) },
   lfoRate: { id: 'lfoRate', label: 'LFO Rate', min: 0, max: 18, step: 0.1, defaultValue: 3.6, section: 'motion', formatter: (value) => `${value.toFixed(1)} Hz` },
   lfoAmount: { id: 'lfoAmount', label: 'LFO Amt', min: 0, max: 1, step: 0.01, defaultValue: 0.16, section: 'motion', formatter: percent },
+  delaySync: { id: 'delaySync', label: 'Delay Sync', min: 0, max: 1, step: 1, defaultValue: 0, section: 'fx', formatter: toggleLabel },
+  delayDivision: { id: 'delayDivision', label: 'Delay Div', min: 0, max: 5, step: 1, defaultValue: 3, section: 'fx', formatter: delayDivisionLabel },
   delayTime: { id: 'delayTime', label: 'Delay Time', min: 0.02, max: 0.8, step: 0.01, defaultValue: 0.33, section: 'fx', formatter: seconds },
   delayFeedback: { id: 'delayFeedback', label: 'Delay FB', min: 0, max: 0.92, step: 0.01, defaultValue: 0.24, section: 'fx', formatter: percent },
   delayMix: { id: 'delayMix', label: 'Delay Mix', min: 0, max: 1, step: 0.01, defaultValue: 0.18, section: 'fx', formatter: percent },
@@ -82,11 +88,13 @@ export const SYNTH_DEFINITIONS: Record<SynthId, SynthDefinition> = {
       'filterCutoff',
       'filterResonance',
       'filterEnvAmount',
-      'drive',
       'lfoRate',
       'lfoAmount',
+      'drive',
       'chorusDepth',
       'chorusMix',
+      'delaySync',
+      'delayDivision',
       'delayTime',
       'delayFeedback',
       'delayMix',
@@ -107,9 +115,11 @@ export const SYNTH_DEFINITIONS: Record<SynthId, SynthDefinition> = {
       'filterCutoff',
       'filterResonance',
       'filterEnvAmount',
-      'drive',
       'accent',
       'slideTime',
+      'drive',
+      'delaySync',
+      'delayDivision',
       'delayTime',
       'delayFeedback',
       'delayMix',
@@ -150,6 +160,8 @@ export const SYNTH_PRESETS: SynthPreset[] = [
       drive: 0.48,
       accent: 0.5,
       slideTime: 0.12,
+      delaySync: 1,
+      delayDivision: 3,
       delayMix: 0.12,
     },
   },
@@ -165,7 +177,8 @@ export const SYNTH_PRESETS: SynthPreset[] = [
       drive: 0.62,
       accent: 0.82,
       slideTime: 0.18,
-      delayTime: 0.21,
+      delaySync: 1,
+      delayDivision: 2,
       delayMix: 0.18,
     },
   },
@@ -189,6 +202,8 @@ export const createPatchForSynth = (synthId: SynthId): Record<SynthParamId, numb
     patch.subMix = 0;
     patch.noiseMix = 0;
     patch.detune = 0;
+    patch.delaySync = 1;
+    patch.delayDivision = 3;
     patch.delayTime = 0.26;
     patch.delayFeedback = 0.28;
     patch.delayMix = 0.12;
@@ -222,7 +237,7 @@ export const applyPresetToPatch = (
 };
 
 export const createInitialSynthSnapshot = (): SynthSnapshot => {
-  const synth = 'core-sub' as const;
+  const synth = 'acid303' as const;
   const initial = applyPresetToPatch(synth, getDefaultPresetId(synth));
   return {
     backend: 'unavailable',
@@ -245,4 +260,21 @@ export const createInitialSynthSnapshot = (): SynthSnapshot => {
     recordedPeak: 0,
     lastRender: null,
   };
+};
+
+export const getParameterDefinitionForSynth = (
+  synthId: SynthId,
+  paramId: SynthParamId,
+): SynthParameterDefinition => {
+  const definition = SYNTH_PARAMETERS[paramId];
+  if (synthId === 'acid303' && paramId === 'waveform') {
+    return {
+      ...definition,
+      max: 1,
+      defaultValue: 0,
+      formatter: (value) => ['Saw', 'Square'][Math.round(value)] ?? 'Saw',
+    };
+  }
+
+  return definition;
 };

@@ -10,7 +10,10 @@ static float pt2_exp_interp(float low, float high, float t)
 
 static bool pt2_param_is_smoothed(int32_t param_id)
 {
-	return param_id != PT2_PARAM_WAVEFORM && param_id != PT2_PARAM_ACCENT;
+	return param_id != PT2_PARAM_WAVEFORM
+		&& param_id != PT2_PARAM_ACCENT
+		&& param_id != PT2_PARAM_DELAY_SYNC
+		&& param_id != PT2_PARAM_DELAY_DIVISION;
 }
 
 static void pt2_voice_reset(pt2SynthVoice_t *voice)
@@ -41,6 +44,8 @@ static void pt2_clear_fx_state(pt2SynthEngine_t *engine)
 	engine->chorusPhase = 0.0f;
 	engine->masterDcBlock.x1 = 0.0f;
 	engine->masterDcBlock.y1 = 0.0f;
+	engine->driveDcBlock.x1 = 0.0f;
+	engine->driveDcBlock.y1 = 0.0f;
 }
 
 static void pt2_panic_voices(pt2SynthEngine_t *engine)
@@ -80,6 +85,8 @@ static void pt2_set_default_patch(pt2SynthEngine_t *engine, int32_t synth_id)
 	engine->params[PT2_PARAM_DETUNE] = (synth_id == PT2_SYNTH_ACID303) ? 0.0f : 0.12f;
 	engine->params[PT2_PARAM_LFO_RATE] = 3.6f;
 	engine->params[PT2_PARAM_LFO_AMOUNT] = (synth_id == PT2_SYNTH_ACID303) ? 0.03f : 0.16f;
+	engine->params[PT2_PARAM_DELAY_SYNC] = (synth_id == PT2_SYNTH_ACID303) ? 1.0f : 0.0f;
+	engine->params[PT2_PARAM_DELAY_DIVISION] = 3.0f;
 	engine->params[PT2_PARAM_DELAY_TIME] = (synth_id == PT2_SYNTH_ACID303) ? 0.26f : 0.33f;
 	engine->params[PT2_PARAM_DELAY_FEEDBACK] = (synth_id == PT2_SYNTH_ACID303) ? 0.28f : 0.24f;
 	engine->params[PT2_PARAM_DELAY_MIX] = (synth_id == PT2_SYNTH_ACID303) ? 0.12f : 0.18f;
@@ -122,6 +129,30 @@ static float pt2_get_param(pt2SynthEngine_t *engine, int32_t param_id)
 		return engine->params[param_id];
 
 	return pt2_smooth1_process(&engine->smoothers[param_id], engine->params[param_id]);
+}
+
+static float pt2_get_delay_time_seconds(const pt2SynthEngine_t *engine)
+{
+	static const float division_multipliers[] = { 0.25f, 0.5f, 0.75f, 1.0f, 1.5f, 2.0f };
+	const float sync_enabled = pt2_clamp_float(engine->params[PT2_PARAM_DELAY_SYNC], 0.0f, 1.0f);
+
+	if (sync_enabled < 0.5f)
+		return pt2_clamp_float(engine->params[PT2_PARAM_DELAY_TIME], 0.02f, 0.8f);
+
+	return (60.0f / pt2_clamp_float(engine->trackerBpm, 32.0f, 255.0f))
+		* division_multipliers[pt2_clamp_int32((int32_t)lroundf(engine->params[PT2_PARAM_DELAY_DIVISION]), 0, 5)];
+}
+
+static float pt2_apply_post_drive(pt2SynthEngine_t *engine, float input)
+{
+	const float drive = pt2_clamp_float(pt2_get_param(engine, PT2_PARAM_DRIVE), 0.0f, 1.0f);
+
+	if (drive <= 0.0001f)
+		return input;
+
+	return pt2_dc_block_process(
+		&engine->driveDcBlock,
+		input + ((tanhf(input * (1.0f + (drive * 8.0f))) - input) * drive));
 }
 
 static void pt2_capture_taps(
@@ -332,7 +363,6 @@ static float pt2_render_voice(
 	const float sub_mix = pt2_clamp_float(pt2_get_param(engine, PT2_PARAM_SUB_MIX), 0.0f, 1.0f);
 	const float noise_mix = pt2_clamp_float(pt2_get_param(engine, PT2_PARAM_NOISE_MIX), 0.0f, 1.0f);
 	const float detune = pt2_clamp_float(pt2_get_param(engine, PT2_PARAM_DETUNE), 0.0f, 0.5f);
-	const float drive = pt2_clamp_float(pt2_get_param(engine, PT2_PARAM_DRIVE), 0.0f, 1.0f);
 	const float cutoff_base = pt2_clamp_float(pt2_get_param(engine, PT2_PARAM_FILTER_CUTOFF), 0.02f, 0.98f);
 	const float resonance = pt2_clamp_float(pt2_get_param(engine, PT2_PARAM_FILTER_RESONANCE), 0.0f, 0.97f);
 	const float env_amount = pt2_clamp_float(pt2_get_param(engine, PT2_PARAM_FILTER_ENV_AMOUNT), -1.0f, 1.0f);
@@ -358,9 +388,8 @@ static float pt2_render_voice(
 		const float acid_cutoff_norm = pt2_clamp_float(pt2_get_param(engine, PT2_PARAM_FILTER_CUTOFF), 0.0f, 1.0f);
 		const float acid_resonance = pt2_clamp_float(pt2_get_param(engine, PT2_PARAM_FILTER_RESONANCE), 0.0f, 0.97f);
 		const float acid_env_amount = pt2_get_param(engine, PT2_PARAM_FILTER_ENV_AMOUNT);
-		const float acid_drive = pt2_clamp_float(pt2_get_param(engine, PT2_PARAM_DRIVE), 0.0f, 1.0f);
 		const float acid_slide = pt2_clamp_float(engine->params[PT2_PARAM_SLIDE_TIME], 0.0f, 0.8f);
-		const int32_t acid_waveform = pt2_clamp_int32((int32_t)lroundf(engine->params[PT2_PARAM_WAVEFORM]), 0, 2);
+		const int32_t acid_waveform = pt2_clamp_int32((int32_t)lroundf(engine->params[PT2_PARAM_WAVEFORM]), 0, 1);
 		float acid_env_scaler = 1.0f;
 		float acid_env_offset = 0.0f;
 		float acid_main_env;
@@ -412,7 +441,7 @@ static float pt2_render_voice(
 			cutoff_hz = pt2_map_acid_cutoff_hz(acid_cutoff_norm) * exp2f(env_octaves + accent_octaves);
 			cutoff_hz = pt2_clamp_float(cutoff_hz, 120.0f, oversampled_rate * 0.20f);
 
-			sample = tanhf(osc * (1.25f + (acid_drive * 2.75f)));
+			sample = tanhf(osc * 1.85f);
 			sample = pt2_onepole_process(&voice->acidPreHighpass, sample);
 			*focused_mix = sample;
 			sample = pt2_acid_filter_process(&voice->acidFilter, sample, cutoff_hz, acid_resonance, oversampled_rate);
@@ -423,7 +452,6 @@ static float pt2_render_voice(
 				*focused_osc_a = osc;
 				*focused_osc_b = 0.0f;
 				*focused_filter = sample;
-				*focused_drive = *focused_mix;
 			}
 
 			voice->phaseA += acid_phase_inc;
@@ -443,7 +471,6 @@ static float pt2_render_voice(
 		engine->lastResonance = acid_resonance;
 		engine->lastAmpEnv = pt2_clamp_float(acid_amp_env, 0.0f, 1.0f);
 		engine->lastFilterEnv = pt2_clamp_float(0.5f + (acid_rc1 - acid_env_offset), 0.0f, 1.0f);
-		engine->lastDrive = acid_drive;
 		*focused_amp = accumulated;
 		return accumulated;
 	}
@@ -484,7 +511,6 @@ static float pt2_render_voice(
 		float band = 0.0f;
 		float high = 0.0f;
 		float filtered = 0.0f;
-		float driven = 0.0f;
 
 		switch (waveform)
 		{
@@ -529,8 +555,7 @@ static float pt2_render_voice(
 		pt2_svf_set(cutoff_hz, resonance, sample_rate * oversample, &g, &k);
 		pt2_svf_process(&voice->filter, g, k, tanhf(mixed), &low, &band, &high);
 		filtered = low;
-		driven = tanhf(filtered * (1.0f + (drive * 6.0f)));
-		accumulated += driven;
+		accumulated += filtered;
 
 		if (((int32_t)(voice - engine->voices)) == engine->focusedVoiceIndex)
 		{
@@ -538,7 +563,6 @@ static float pt2_render_voice(
 			*focused_osc_b = osc_b;
 			*focused_mix = mixed;
 			*focused_filter = filtered;
-			*focused_drive = driven;
 		}
 
 		voice->phaseA += phase_inc_a;
@@ -557,7 +581,6 @@ static float pt2_render_voice(
 	*focused_amp = accumulated;
 	engine->lastAmpEnv = env_level;
 	engine->lastFilterEnv = pt2_clamp_float(0.5f + (((env_level * 2.0f) - 1.0f) * env_amount * 0.5f), 0.0f, 1.0f);
-	engine->lastDrive = drive;
 	return accumulated;
 }
 
@@ -565,7 +588,7 @@ static void pt2_apply_fx(pt2SynthEngine_t *engine, float input, float sample_rat
 {
 	const float chorus_depth = pt2_clamp_float(pt2_get_param(engine, PT2_PARAM_CHORUS_DEPTH), 0.0f, 1.0f);
 	const float chorus_mix = pt2_clamp_float(pt2_get_param(engine, PT2_PARAM_CHORUS_MIX), 0.0f, 1.0f);
-	const float delay_time = pt2_clamp_float(pt2_get_param(engine, PT2_PARAM_DELAY_TIME), 0.02f, 0.8f);
+	const float delay_time = pt2_get_delay_time_seconds(engine);
 	const float delay_feedback = pt2_clamp_float(pt2_get_param(engine, PT2_PARAM_DELAY_FEEDBACK), 0.0f, 0.92f);
 	const float delay_mix = pt2_clamp_float(pt2_get_param(engine, PT2_PARAM_DELAY_MIX), 0.0f, 1.0f);
 	const float chorus_base = 24.0f + (chorus_depth * 170.0f);
@@ -623,9 +646,9 @@ static void pt2_render_frames(pt2SynthEngine_t *engine, int32_t frames, float sa
 		float focused_osc_b = 0.0f;
 		float focused_mix = 0.0f;
 		float focused_filter = 0.0f;
-		float focused_drive = 0.0f;
 		float focused_amp = 0.0f;
 		float dry = 0.0f;
+		float driven = 0.0f;
 		float left = 0.0f;
 		float right = 0.0f;
 		float mono = 0.0f;
@@ -641,11 +664,11 @@ static void pt2_render_frames(pt2SynthEngine_t *engine, int32_t frames, float sa
 				sample_rate,
 				lfo_value,
 				&focused_osc_a,
-				&focused_osc_b,
-				&focused_mix,
-				&focused_filter,
-				&focused_drive,
-				&focused_amp);
+					&focused_osc_b,
+					&focused_mix,
+					&focused_filter,
+					&driven,
+					&focused_amp);
 		}
 		else
 		{
@@ -657,15 +680,16 @@ static void pt2_render_frames(pt2SynthEngine_t *engine, int32_t frames, float sa
 					sample_rate,
 					lfo_value,
 					&focused_osc_a,
-					&focused_osc_b,
-					&focused_mix,
-					&focused_filter,
-					&focused_drive,
-					&focused_amp);
+						&focused_osc_b,
+						&focused_mix,
+						&focused_filter,
+						&driven,
+						&focused_amp);
 			}
 		}
 
-		pt2_apply_fx(engine, dry, sample_rate, &left, &right);
+		driven = pt2_apply_post_drive(engine, dry);
+		pt2_apply_fx(engine, driven, sample_rate, &left, &right);
 
 		left = pt2_dc_block_process(&engine->masterDcBlock, left * master_gain);
 		right *= master_gain;
@@ -677,7 +701,8 @@ static void pt2_render_frames(pt2SynthEngine_t *engine, int32_t frames, float sa
 
 		mono = (left + right) * 0.5f;
 		engine->lastPeak = fmaxf(engine->lastPeak, fabsf(mono));
-		pt2_capture_taps(engine, focused_osc_a, focused_osc_b, focused_mix, focused_filter, focused_drive, focused_amp, mono);
+		engine->lastDrive = pt2_clamp_float(pt2_get_param(engine, PT2_PARAM_DRIVE), 0.0f, 1.0f);
+		pt2_capture_taps(engine, focused_osc_a, focused_osc_b, focused_mix, focused_filter, driven, focused_amp, mono);
 
 		engine->lfoPhase += (2.0f * (float)M_PI * lfo_rate) / sample_rate;
 		engine->chorusPhase += (2.0f * (float)M_PI * 0.23f) / sample_rate;
@@ -710,13 +735,14 @@ void pt2_synth_engine_reset(pt2SynthEngine_t *engine)
 	engine->renderedSampleLength = 0;
 	engine->lastPeak = 0.0f;
 	engine->lastSampleRate = 48000.0f;
+	engine->trackerBpm = 125.0f;
 	engine->lastCutoffNorm = 0.5f;
 	engine->lastResonance = 0.0f;
 	engine->lastAmpEnv = 0.0f;
 	engine->lastFilterEnv = 0.5f;
 	engine->lastLfo = 0.0f;
 	engine->lastDrive = 0.0f;
-	pt2_set_default_patch(engine, PT2_SYNTH_CORE_SUB);
+	pt2_set_default_patch(engine, PT2_SYNTH_ACID303);
 	engine->telemetryVersion += 1u;
 }
 
@@ -737,6 +763,12 @@ void pt2_synth_engine_set_param(pt2SynthEngine_t *engine, int32_t param_id, floa
 		return;
 
 	engine->params[param_id] = value;
+	engine->telemetryVersion += 1u;
+}
+
+void pt2_synth_engine_set_bpm(pt2SynthEngine_t *engine, float bpm)
+{
+	engine->trackerBpm = pt2_clamp_float(bpm, 32.0f, 255.0f);
 	engine->telemetryVersion += 1u;
 }
 

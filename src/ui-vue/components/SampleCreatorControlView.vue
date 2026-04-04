@@ -17,14 +17,15 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
-import { SYNTH_PARAMETERS } from '../../core/synthConfig';
-import type { SynthParamId } from '../../core/synthTypes';
+import { getParameterDefinitionForSynth } from '../../core/synthConfig';
+import type { SynthId, SynthParamId } from '../../core/synthTypes';
 
 const props = defineProps<{
+  synthId: SynthId;
   paramId: SynthParamId;
   value: number;
 }>();
 
-const definition = computed(() => SYNTH_PARAMETERS[props.paramId]);
+const definition = computed(() => getParameterDefinitionForSynth(props.synthId, props.paramId));
 const displayValue = computed(() => definition.value.formatter?.(props.value) ?? props.value.toFixed(2));
 </script>

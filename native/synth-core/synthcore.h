@@ -6,6 +6,7 @@ int32_t pt2_synth_boot(void);
 void pt2_synth_reset(void);
 void pt2_synth_set_synth(int32_t synthId);
 void pt2_synth_set_param(int32_t paramId, float value);
+void pt2_synth_set_bpm(float bpm);
 void pt2_synth_note_on(int32_t midiNote, float velocity);
 void pt2_synth_note_off(int32_t midiNote);
 void pt2_synth_panic(void);

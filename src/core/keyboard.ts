@@ -96,7 +96,10 @@ export const interpretKeyboard = (
         type: 'pattern/set-cell',
         row: snapshot.cursor.row,
         channel: snapshot.cursor.channel,
-        patch: { note },
+        patch: {
+          note,
+          sample: snapshot.selectedSample,
+        },
       },
     };
   }

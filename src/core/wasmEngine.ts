@@ -194,33 +194,23 @@ export class WasmTrackerEngine implements TrackerEngine {
   }
 
   importSample(slot: number, sample: ImportedSample): void {
-    const module = this.requireModule();
     const length = sample.data.length;
-    const pointer = this.callNumber('malloc', ['number'], [length > 0 ? length : 1]);
-    try {
-      if (length > 0) {
-        module.HEAP8.set(sample.data, pointer);
-      } else {
-        module.HEAP8[pointer] = 0;
-      }
-
-      this.callVoid(
-        'pt2_web_engine_import_sample_buffer',
-        ['number', 'string', 'number', 'number', 'number', 'number', 'number', 'number'],
-        [
-          slot,
-          sample.name,
-          sample.volume,
-          sample.fineTune,
-          sample.loopStart,
-          sample.loopLength,
-          pointer,
-          length,
-        ],
-      );
-    } finally {
-      this.callVoid('free', ['number'], [pointer]);
-    }
+    const data = length > 0 ? Uint8Array.from(sample.data, (value) => value & 0xff) : new Uint8Array([0]);
+    this.requireModule().ccall(
+      'pt2_web_engine_import_sample_buffer',
+      null,
+      ['number', 'string', 'number', 'number', 'number', 'number', 'array', 'number'],
+      [
+        slot,
+        sample.name,
+        sample.volume,
+        sample.fineTune,
+        sample.loopStart,
+        sample.loopLength,
+        data,
+        length,
+      ],
+    );
 
     this.emitSnapshot(this.getSnapshot());
   }

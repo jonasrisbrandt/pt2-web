@@ -41,15 +41,17 @@ enum
 	PT2_PARAM_DETUNE = 13,
 	PT2_PARAM_LFO_RATE = 14,
 	PT2_PARAM_LFO_AMOUNT = 15,
-	PT2_PARAM_DELAY_TIME = 16,
-	PT2_PARAM_DELAY_FEEDBACK = 17,
-	PT2_PARAM_DELAY_MIX = 18,
-	PT2_PARAM_CHORUS_DEPTH = 19,
-	PT2_PARAM_CHORUS_MIX = 20,
-	PT2_PARAM_ACCENT = 21,
-	PT2_PARAM_SLIDE_TIME = 22,
-	PT2_PARAM_PULSE_WIDTH = 23,
-	PT2_PARAM_COUNT = 24
+	PT2_PARAM_DELAY_SYNC = 16,
+	PT2_PARAM_DELAY_DIVISION = 17,
+	PT2_PARAM_DELAY_TIME = 18,
+	PT2_PARAM_DELAY_FEEDBACK = 19,
+	PT2_PARAM_DELAY_MIX = 20,
+	PT2_PARAM_CHORUS_DEPTH = 21,
+	PT2_PARAM_CHORUS_MIX = 22,
+	PT2_PARAM_ACCENT = 23,
+	PT2_PARAM_SLIDE_TIME = 24,
+	PT2_PARAM_PULSE_WIDTH = 25,
+	PT2_PARAM_COUNT = 26
 };
 
 enum
@@ -115,8 +117,10 @@ typedef struct pt2SynthEngine_t
 	float lfoPhase;
 	float chorusPhase;
 	pt2DcBlockState_t masterDcBlock;
+	pt2DcBlockState_t driveDcBlock;
 	int32_t focusedVoiceIndex;
 	float lastSampleRate;
+	float trackerBpm;
 	float lastPeak;
 	float lastCutoffNorm;
 	float lastResonance;
@@ -136,6 +140,7 @@ void pt2_synth_engine_boot(pt2SynthEngine_t *engine);
 void pt2_synth_engine_reset(pt2SynthEngine_t *engine);
 void pt2_synth_engine_set_synth(pt2SynthEngine_t *engine, int32_t synth_id);
 void pt2_synth_engine_set_param(pt2SynthEngine_t *engine, int32_t param_id, float value);
+void pt2_synth_engine_set_bpm(pt2SynthEngine_t *engine, float bpm);
 void pt2_synth_engine_note_on(pt2SynthEngine_t *engine, int32_t midi_note, float velocity);
 void pt2_synth_engine_note_off(pt2SynthEngine_t *engine, int32_t midi_note);
 void pt2_synth_engine_panic(pt2SynthEngine_t *engine);

@@ -25,6 +25,11 @@ void pt2_synth_set_param(int32_t paramId, float value)
 	pt2_synth_engine_set_param(&pt2Engine, paramId, value);
 }
 
+void pt2_synth_set_bpm(float bpm)
+{
+	pt2_synth_engine_set_bpm(&pt2Engine, bpm);
+}
+
 void pt2_synth_note_on(int32_t midiNote, float velocity)
 {
 	pt2_synth_engine_note_on(&pt2Engine, midiNote, velocity);

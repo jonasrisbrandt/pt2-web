@@ -280,7 +280,7 @@ export class TrackerApplication {
     normalize: true,
     fadeOut: true,
     targetSlot: 0,
-    sampleName: 'core-sub',
+    sampleName: 'acid303',
     volume: 64,
     fineTune: 0,
     loopStart: 0,
@@ -332,6 +332,7 @@ export class TrackerApplication {
         const previousPlaying = this.snapshot?.transport.playing ?? false;
         this.snapshot = snapshot;
         this.quadrascope = quadrascope ?? this.quadrascope;
+        this.synthEngine?.dispatch({ type: 'tempo/set', bpm: snapshot.transport.bpm });
         if (previousPlaying && !snapshot.transport.playing) {
           this.resetVisualizationState();
         }
@@ -1846,6 +1847,7 @@ export class TrackerApplication {
       snapshot: synthSnapshot,
       telemetry: this.synthTelemetry,
       targetSample,
+      sampleSlots: snapshot.samples,
       keyboardOctave: this.keyboardOctave,
       renderJob: this.sampleCreatorState,
       pianoStartAbsolute: pianoRange.startAbsolute,
@@ -1986,26 +1988,45 @@ export class TrackerApplication {
           this.render();
           return;
         case 'sample-creator-preview-note':
-          if (this.synthSnapshot.inputArm === 'tracker') {
-            this.recordTrackerMidiNote(this.sampleCreatorState.midiNote, this.sampleCreatorState.velocity);
-          } else {
-            void this.previewRenderedSynthNote();
-          }
+        case 'sample-creator-preview-bake':
+          void this.previewRenderedSynthNote();
           return;
         case 'sample-creator-stop':
+        case 'sample-creator-stop-live':
           this.stopSynthPreview();
           return;
         case 'sample-creator-record':
+        case 'sample-creator-capture':
           this.synthEngine.dispatch({ type: this.synthSnapshot.recordState === 'recording' ? 'record/stop' : 'record/start' });
           return;
         case 'sample-creator-discard-recording':
+        case 'sample-creator-discard-capture':
           this.synthEngine.dispatch({ type: 'record/discard' });
           return;
         case 'sample-creator-commit-recording':
-          this.commitRecordedSampleCreatorSample();
+        case 'sample-creator-commit-capture':
+          try {
+            this.commitRecordedSampleCreatorSample();
+          } catch (error) {
+            const message = error instanceof Error ? error.message : 'Capture import failed.';
+            if (this.synthSnapshot) {
+              this.synthSnapshot.status = message;
+            }
+            console.error('Sample Creator capture commit failed.', error);
+            this.render();
+          }
           return;
         case 'sample-creator-bake':
-          await this.bakeSampleCreatorSample();
+          try {
+            await this.bakeSampleCreatorSample();
+          } catch (error) {
+            const message = error instanceof Error ? error.message : 'Bake failed.';
+            if (this.synthSnapshot) {
+              this.synthSnapshot.status = message;
+            }
+            console.error('Sample Creator bake failed.', error);
+            this.render();
+          }
           return;
       }
     }
@@ -2056,10 +2077,6 @@ export class TrackerApplication {
       shiftVisualization: (direction) => this.shiftVisualization(direction),
       });
 
-    if (this.synthEngine && this.snapshot) {
-      this.sampleCreatorState.targetSlot = this.snapshot.selectedSample;
-      this.synthEngine.dispatch({ type: 'target-slot/set', slot: this.snapshot.selectedSample });
-    }
     if (menuWasOpen) {
       this.openMenu = null;
       this.render();
@@ -2164,9 +2181,21 @@ export class TrackerApplication {
             this.sampleCreatorState.sampleName = event.target.value.slice(0, 22);
           }
           return;
+        case 'sample-creator-target-slot':
+          if (event.target instanceof HTMLSelectElement) {
+            const slot = clamp(Number(event.target.value), 0, 30);
+            this.sampleCreatorState.targetSlot = slot;
+            this.synthEngine.dispatch({ type: 'target-slot/set', slot });
+          }
+          return;
         case 'sample-creator-duration':
           if (event.target instanceof HTMLInputElement) {
             this.sampleCreatorState.durationSeconds = clamp(Number(event.target.value), 0.05, 6);
+          }
+          return;
+        case 'sample-creator-velocity':
+          if (event.target instanceof HTMLInputElement) {
+            this.sampleCreatorState.velocity = clamp(Number(event.target.value), 0.05, 1);
           }
           return;
         case 'sample-creator-tail':
@@ -2423,11 +2452,12 @@ export class TrackerApplication {
 
     const note = this.absoluteToTrackerNote(midiNote);
     const channel = this.snapshot.cursor.channel;
+    const sample = this.snapshot.selectedSample;
     this.engine.dispatch({
       type: 'pattern/set-cell',
       row: this.snapshot.cursor.row,
       channel,
-      patch: { note },
+      patch: { note, sample },
     });
     this.previewModernNote(note, channel);
     const absolute = noteToAbsolute(note);
@@ -2446,14 +2476,23 @@ export class TrackerApplication {
       return;
     }
 
+    const targetSlot = this.sampleCreatorState.targetSlot;
     const rendered = await this.synthEngine.renderSample({
       ...this.sampleCreatorState,
       sampleRate: this.synthSnapshot.bakeSampleRate,
     });
-    this.engine.importSample(this.synthSnapshot.targetSampleSlot, rendered);
+    this.engine.importSample(targetSlot, rendered);
+    this.engine.dispatch({ type: 'sample/select', sample: targetSlot });
     this.snapshot = this.engine.getSnapshot();
+    const importedSample = this.snapshot.samples[targetSlot];
+    if (!importedSample || importedSample.length <= 0) {
+      throw new Error(`Baked audio did not appear in slot ${String(targetSlot + 1).padStart(2, '0')}.`);
+    }
+    if (this.synthSnapshot) {
+      this.synthSnapshot.status = `Baked ${rendered.data.length} samples into Slot ${String(targetSlot + 1).padStart(2, '0')} (${importedSample.length} bytes in tracker).`;
+    }
     this.lastSelectedSample = this.snapshot.selectedSample;
-    this.invalidateSampleCache(this.snapshot.selectedSample);
+    this.invalidateSampleCache(targetSlot);
     this.refreshSelectedSampleWaveform(this.snapshot, true);
     this.render();
   }
@@ -2463,6 +2502,7 @@ export class TrackerApplication {
       return;
     }
 
+    const targetSlot = this.sampleCreatorState.targetSlot;
     const rendered = this.synthEngine.getRecordedSample({
       ...this.sampleCreatorState,
       sampleRate: this.synthSnapshot.bakeSampleRate,
@@ -2471,10 +2511,18 @@ export class TrackerApplication {
       return;
     }
 
-    this.engine.importSample(this.synthSnapshot.targetSampleSlot, rendered);
+    this.engine.importSample(targetSlot, rendered);
+    this.engine.dispatch({ type: 'sample/select', sample: targetSlot });
     this.snapshot = this.engine.getSnapshot();
+    const importedSample = this.snapshot.samples[targetSlot];
+    if (!importedSample || importedSample.length <= 0) {
+      throw new Error(`Captured audio did not appear in slot ${String(targetSlot + 1).padStart(2, '0')}.`);
+    }
+    if (this.synthSnapshot) {
+      this.synthSnapshot.status = `Committed capture into Slot ${String(targetSlot + 1).padStart(2, '0')} (${importedSample.length} bytes in tracker).`;
+    }
     this.lastSelectedSample = this.snapshot.selectedSample;
-    this.invalidateSampleCache(this.snapshot.selectedSample);
+    this.invalidateSampleCache(targetSlot);
     this.refreshSelectedSampleWaveform(this.snapshot, true);
     this.render();
   }
@@ -2933,7 +2981,10 @@ export class TrackerApplication {
       type: 'pattern/set-cell',
       row: this.snapshot.cursor.row,
       channel,
-      patch: { note: targetKey.note },
+      patch: {
+        note: targetKey.note,
+        sample: this.snapshot.selectedSample,
+      },
     });
     this.previewModernNote(targetKey.note, channel);
     this.triggerPianoGlow(channel, targetKey.absolute);

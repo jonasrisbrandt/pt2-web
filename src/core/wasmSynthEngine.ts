@@ -14,14 +14,31 @@ import type {
 import type { SynthEngine } from './synthEngine';
 import { SynthPreviewDriver } from './synthPreviewDriver';
 
-type SynthModule = {
-  HEAP8?: Int8Array;
-  HEAPF32?: Float32Array;
-  ccall: <T>(ident: string, returnType: string | null, argTypes: string[], args: unknown[]) => T;
-};
+type WasmExportName =
+  | 'pt2_synth_boot'
+  | 'pt2_synth_reset'
+  | 'pt2_synth_set_synth'
+  | 'pt2_synth_set_param'
+  | 'pt2_synth_set_bpm'
+  | 'pt2_synth_note_on'
+  | 'pt2_synth_note_off'
+  | 'pt2_synth_panic'
+  | 'pt2_synth_render_preview'
+  | 'pt2_synth_preview_buffer'
+  | 'pt2_synth_preview_buffer_length'
+  | 'pt2_synth_render_sample'
+  | 'pt2_synth_sample_buffer'
+  | 'pt2_synth_sample_buffer_length'
+  | 'pt2_synth_telemetry_buffer'
+  | 'pt2_synth_telemetry_buffer_length'
+  | '__wasm_call_ctors';
 
-type SynthModuleFactory = (options: Record<string, unknown>) => Promise<SynthModule>;
-type EmscriptenInstantiateCallback = (instance: WebAssembly.Instance, module: WebAssembly.Module) => void;
+type SynthModule = {
+  memory: WebAssembly.Memory;
+  exports: Record<WasmExportName, (...args: number[]) => number | void>;
+  HEAP8: Int8Array;
+  HEAPF32: Float32Array;
+};
 
 const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
 
@@ -29,24 +46,8 @@ const TELEMETRY_HEADER_SIZE = 16;
 const TELEMETRY_POINTS = 96;
 const TELEMETRY_TAP_IDS: SynthTelemetryTapId[] = ['oscA', 'oscB', 'mix', 'filter', 'drive', 'amp', 'master'];
 const TELEMETRY_CURVE_IDS: SynthTelemetryCurveId[] = ['ampEnv', 'filterEnv', 'lfo', 'filterResponse'];
-const SYNTH_WASM_JS_URL = '/wasm-synth/synthcore.js';
 const SYNTH_WASM_BINARY_URL = '/wasm-synth/synthcore.wasm';
-
-const normalizeWasmImports = (imports: WebAssembly.Imports): WebAssembly.Imports => {
-  const normalized = { ...imports } as Record<string, unknown>;
-  const envModule = normalized.env;
-  const minifiedModule = normalized.a;
-
-  if (!envModule && minifiedModule) {
-    normalized.env = minifiedModule;
-  }
-
-  if (!minifiedModule && envModule) {
-    normalized.a = envModule;
-  }
-
-  return normalized as WebAssembly.Imports;
-};
+const formatSlotLabel = (slot: number): string => `Slot ${String(slot + 1).padStart(2, '0')}`;
 
 const fetchSynthWasmBinary = async (): Promise<ArrayBuffer> => {
   const response = await fetch(SYNTH_WASM_BINARY_URL, { credentials: 'same-origin' });
@@ -55,17 +56,6 @@ const fetchSynthWasmBinary = async (): Promise<ArrayBuffer> => {
   }
 
   return response.arrayBuffer();
-};
-
-const loadSynthModuleFactory = async (): Promise<SynthModuleFactory> => {
-  const dynamicImport = new Function('path', 'return import(path);') as (path: string) => Promise<{ default?: SynthModuleFactory }>;
-  const imported = await dynamicImport(SYNTH_WASM_JS_URL);
-  const factory = imported.default as SynthModuleFactory | undefined;
-  if (!factory) {
-    throw new Error('The synth wasm module did not expose a default factory.');
-  }
-
-  return factory;
 };
 
 export class WasmSynthEngine implements SynthEngine {
@@ -77,20 +67,9 @@ export class WasmSynthEngine implements SynthEngine {
   private telemetry: SynthTelemetrySnapshot | null = null;
 
   async init(): Promise<void> {
-    const factory = await loadSynthModuleFactory();
     const wasmBinary = await fetchSynthWasmBinary();
-    const wasmBytes = new Uint8Array(wasmBinary);
-    this.module = await factory({
-      locateFile: (path: string) => `/wasm-synth/${path}`,
-      wasmBinary: wasmBytes,
-      instantiateWasm: (imports: WebAssembly.Imports, receiveInstance: EmscriptenInstantiateCallback) => {
-        const normalizedImports = normalizeWasmImports(imports);
-        const module = new WebAssembly.Module(wasmBinary);
-        const instance = new WebAssembly.Instance(module, normalizedImports);
-        receiveInstance(instance, module);
-        return instance.exports;
-      },
-    });
+    this.module = await this.instantiateModule(wasmBinary);
+    this.module.exports.__wasm_call_ctors();
 
     const booted = this.callNumber('pt2_synth_boot', [], []);
     if (booted !== 1) {
@@ -196,6 +175,9 @@ export class WasmSynthEngine implements SynthEngine {
       case 'bake-rate/set':
         this.snapshot.bakeSampleRate = clamp(command.sampleRate, 11025, 48000);
         break;
+      case 'tempo/set':
+        this.callVoid('pt2_synth_set_bpm', ['number'], [clamp(command.bpm, 32, 255)]);
+        break;
       case 'record/start':
         this.recordedAudio = null;
         this.snapshot.recordState = 'recording';
@@ -203,7 +185,7 @@ export class WasmSynthEngine implements SynthEngine {
         this.snapshot.recordedDurationSeconds = 0;
         this.snapshot.recordedPeak = 0;
         this.previewDriver?.startRecording();
-        this.snapshot.status = 'Recording synth preview...';
+        this.snapshot.status = `Capturing live performance for ${formatSlotLabel(this.snapshot.targetSampleSlot)}...`;
         break;
       case 'record/stop': {
         const capture = this.previewDriver?.stopRecording() ?? null;
@@ -217,7 +199,7 @@ export class WasmSynthEngine implements SynthEngine {
         this.snapshot.recordedWaveform = null;
         this.snapshot.recordedDurationSeconds = 0;
         this.snapshot.recordedPeak = 0;
-        this.snapshot.status = 'Recorded preview discarded.';
+        this.snapshot.status = 'Capture discarded.';
         break;
       case 'target-slot/set':
         this.snapshot.targetSampleSlot = clamp(command.slot, 0, 30);
@@ -288,7 +270,7 @@ export class WasmSynthEngine implements SynthEngine {
     };
 
     this.snapshot.lastRender = rendered;
-    this.snapshot.status = `Rendered ${rendered.name} from ${this.snapshot.selectedSynth === 'acid303' ? 'Acid303' : 'CoreSub'}.`;
+    this.snapshot.status = `Baked ${rendered.name} to ${formatSlotLabel(job.targetSlot)}.`;
     this.refreshTelemetry();
     this.emitSnapshot();
     return rendered;
@@ -305,7 +287,7 @@ export class WasmSynthEngine implements SynthEngine {
     }
 
     this.snapshot.lastRender = rendered;
-    this.snapshot.status = `Committed recorded preview to ${rendered.name}.`;
+    this.snapshot.status = `Capture committed to ${formatSlotLabel(job.targetSlot)} as ${rendered.name}.`;
     this.emitSnapshot();
     return rendered;
   }
@@ -377,7 +359,7 @@ export class WasmSynthEngine implements SynthEngine {
     this.recordedAudio = capture;
     if (!capture) {
       this.snapshot.recordState = 'idle';
-      this.snapshot.status = 'No recorded preview captured.';
+      this.snapshot.status = 'No capture was recorded.';
       this.emitSnapshot();
       return;
     }
@@ -392,16 +374,18 @@ export class WasmSynthEngine implements SynthEngine {
     this.snapshot.recordedWaveform = createWaveformPreview(mono);
     this.snapshot.recordedDurationSeconds = mono.length / capture.sampleRate;
     this.snapshot.recordedPeak = peak;
-    this.snapshot.status = 'Recorded preview captured.';
+    this.snapshot.status = `Capture ready to commit to ${formatSlotLabel(this.snapshot.targetSampleSlot)}.`;
     this.emitSnapshot();
   }
 
   private callNumber(name: string, argTypes: string[], args: unknown[]): number {
-    return this.requireModule().ccall<number>(name, 'number', argTypes, args);
+    void argTypes;
+    return Number(this.invokeExport(name as WasmExportName, args));
   }
 
   private callVoid(name: string, argTypes: string[], args: unknown[]): void {
-    this.requireModule().ccall(name, null, argTypes, args);
+    void argTypes;
+    this.invokeExport(name as WasmExportName, args);
   }
 
   private requireModule(): SynthModule {
@@ -410,6 +394,95 @@ export class WasmSynthEngine implements SynthEngine {
     }
 
     return this.module;
+  }
+
+  private async instantiateModule(wasmBinary: ArrayBuffer): Promise<SynthModule> {
+    let memory: WebAssembly.Memory | null = null;
+    let heap8 = new Int8Array(0);
+    let heapF32 = new Float32Array(0);
+
+    const updateMemoryViews = (): void => {
+      if (!memory) {
+        throw new Error('The synth wasm memory export is not available.');
+      }
+
+      heap8 = new Int8Array(memory.buffer);
+      heapF32 = new Float32Array(memory.buffer);
+      if (this.module) {
+        this.module.HEAP8 = heap8;
+        this.module.HEAPF32 = heapF32;
+      }
+    };
+
+    const alignMemory = (size: number, alignment: number): number => Math.ceil(size / alignment) * alignment;
+    const getHeapMax = (): number => 2147483648;
+    const emscriptenResizeHeap = (requestedSize: number): number => {
+      if (!memory) {
+        return 0;
+      }
+
+      const oldSize = memory.buffer.byteLength;
+      const nextSize = requestedSize >>> 0;
+      if (nextSize > getHeapMax()) {
+        return 0;
+      }
+
+      for (let cutDown = 1; cutDown <= 4; cutDown *= 2) {
+        const overGrownHeapSize = oldSize * (1 + (0.2 / cutDown));
+        const candidate = Math.min(
+          getHeapMax(),
+          alignMemory(Math.max(nextSize, overGrownHeapSize, nextSize + 100663296), 65536),
+        );
+        const pages = ((candidate - oldSize) + 65535) >> 16;
+        if (pages <= 0) {
+          updateMemoryViews();
+          return 1;
+        }
+
+        try {
+          memory.grow(pages);
+          updateMemoryViews();
+          return 1;
+        } catch {
+          // Retry with a smaller growth target.
+        }
+      }
+
+      return 0;
+    };
+
+    const instance = await WebAssembly.instantiate(wasmBinary, {
+      env: {
+        emscripten_resize_heap: emscriptenResizeHeap,
+      },
+    });
+    const exports = instance instanceof WebAssembly.Instance ? instance.exports : instance.instance.exports;
+    const typedExports = exports as unknown as SynthModule['exports'] & { memory: WebAssembly.Memory };
+    memory = typedExports.memory;
+    updateMemoryViews();
+
+    return {
+      memory,
+      exports: typedExports,
+      HEAP8: heap8,
+      HEAPF32: heapF32,
+    };
+  }
+
+  private invokeExport(name: WasmExportName, args: unknown[]): number | void {
+    const module = this.requireModule();
+    const exported = module.exports[name];
+    if (typeof exported !== 'function') {
+      throw new Error(`The synth wasm runtime did not expose ${name}.`);
+    }
+
+    const result = exported(...args.map((value) => Number(value)));
+    if (module.HEAP8.buffer !== module.memory.buffer || module.HEAPF32.buffer !== module.memory.buffer) {
+      module.HEAP8 = new Int8Array(module.memory.buffer);
+      module.HEAPF32 = new Float32Array(module.memory.buffer);
+    }
+
+    return result;
   }
 
   private refreshTelemetry(): void {

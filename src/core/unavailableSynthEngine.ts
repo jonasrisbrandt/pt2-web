@@ -39,6 +39,8 @@ export class UnavailableSynthEngine implements SynthEngine {
       case 'bake-rate/set':
         this.snapshot.bakeSampleRate = command.sampleRate;
         break;
+      case 'tempo/set':
+        break;
     }
 
     this.emitSnapshot();

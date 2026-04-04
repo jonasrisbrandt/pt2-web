@@ -22,6 +22,8 @@ export type SynthParamId =
   | 'detune'
   | 'lfoRate'
   | 'lfoAmount'
+  | 'delaySync'
+  | 'delayDivision'
   | 'delayTime'
   | 'delayFeedback'
   | 'delayMix'
@@ -145,6 +147,7 @@ export type SynthCommand =
   | { type: 'preview/note-off'; midiNote: number }
   | { type: 'preview/panic' }
   | { type: 'bake-rate/set'; sampleRate: number }
+  | { type: 'tempo/set'; bpm: number }
   | { type: 'record/start' }
   | { type: 'record/stop' }
   | { type: 'record/discard' }

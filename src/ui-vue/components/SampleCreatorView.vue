@@ -29,18 +29,45 @@
     </div>
 
     <div class="sample-creator-meta">
-      <div class="sample-creator-card">
-        <p class="metric-label">Target sample</p>
-        <strong class="sample-creator-target">Slot {{ targetSampleLabel }}</strong>
-        <p class="hint">MIDI {{ snapshot.midiAvailable ? 'connected' : 'not connected' }} | Input armed to {{ snapshot.inputArm }}</p>
-      </div>
-      <div class="sample-creator-card">
-        <p class="metric-label">Backend</p>
-        <strong class="sample-creator-target">{{ backendLabel }}</strong>
+      <section class="sample-creator-card">
+        <div class="sample-creator-card__head">
+          <p class="metric-label">Target Slot</p>
+          <strong class="sample-creator-target">Slot {{ targetSlotNumber }}</strong>
+        </div>
+        <strong class="sample-creator-target">{{ targetSampleLabel }}</strong>
+        <label class="sample-creator-select-wrap">
+          <span class="metric-label">Import destination</span>
+          <select
+            class="sample-creator-select"
+            data-input="sample-creator-target-slot"
+          >
+            <option
+              v-for="slot in sampleSlots"
+              :key="slot.index"
+              :value="slot.index"
+              :selected="slot.index === renderJob.targetSlot"
+            >{{ formatSlotLabel(slot.index, slot.name) }}</option>
+          </select>
+        </label>
+        <p class="hint">
+          Bake and capture both write to this slot.
+          <template v-if="selectedTargetSample">
+            {{ selectedTargetSample.length > 0 ? ` Current length ${selectedTargetSample.length} bytes.` : ' Slot is currently empty.' }}
+          </template>
+        </p>
+      </section>
+      <section class="sample-creator-card">
+        <div class="sample-creator-card__head">
+          <p class="metric-label">Backend</p>
+          <strong class="sample-creator-target">{{ backendLabel }}</strong>
+        </div>
         <p class="hint">{{ backendDetails }}</p>
-      </div>
-      <div class="sample-creator-card">
-        <p class="metric-label">Synth</p>
+      </section>
+      <section class="sample-creator-card">
+        <div class="sample-creator-card__head">
+          <p class="metric-label">Synth</p>
+          <span class="hint">{{ midiInputLabel }}</span>
+        </div>
         <div class="sample-creator-segmented">
           <button
             type="button"
@@ -69,12 +96,22 @@
             >{{ preset.name }}</option>
           </select>
         </label>
-      </div>
-      <div class="sample-creator-card">
-        <p class="metric-label">Render</p>
-        <div class="sample-creator-render-grid">
-          <label class="sample-creator-inline-field">
-            <span>Name</span>
+      </section>
+    </div>
+
+    <div class="sample-creator-grid sample-creator-grid--primary">
+      <section class="sample-creator-card sample-creator-card--bake">
+        <div class="sample-creator-card__head">
+          <div>
+            <p class="metric-label">Bake Sample</p>
+            <p class="hint">Render a controlled synth note directly into the target slot.</p>
+          </div>
+          <span class="hint">Slot {{ targetSlotNumber }}</span>
+        </div>
+
+        <div class="sample-creator-render-grid sample-creator-render-grid--meta">
+          <label class="sample-creator-inline-field sample-creator-inline-field--wide">
+            <span>Sample Name</span>
             <input
               type="text"
               data-input="sample-creator-name"
@@ -83,62 +120,7 @@
             />
           </label>
           <label class="sample-creator-inline-field">
-            <span>Duration</span>
-            <input
-              type="number"
-              data-input="sample-creator-duration"
-              :value="renderJob.durationSeconds"
-              min="0.05"
-              max="6"
-              step="0.05"
-            />
-          </label>
-          <label class="sample-creator-inline-field">
-            <span>Tail</span>
-            <input
-              type="number"
-              data-input="sample-creator-tail"
-              :value="renderJob.tailSeconds"
-              min="0"
-              max="4"
-              step="0.05"
-            />
-          </label>
-          <label class="sample-creator-inline-field">
-            <span>Root note</span>
-            <input
-              type="number"
-              data-input="sample-creator-note"
-              :value="renderJob.midiNote"
-              min="24"
-              max="96"
-              step="1"
-            />
-          </label>
-          <label class="sample-creator-inline-field">
-            <span>Volume</span>
-            <input
-              type="number"
-              data-input="sample-creator-volume"
-              :value="renderJob.volume"
-              min="0"
-              max="64"
-              step="1"
-            />
-          </label>
-          <label class="sample-creator-inline-field">
-            <span>Fine tune</span>
-            <input
-              type="number"
-              data-input="sample-creator-finetune"
-              :value="renderJob.fineTune"
-              min="-8"
-              max="7"
-              step="1"
-            />
-          </label>
-          <label class="sample-creator-inline-field">
-            <span>Bake rate</span>
+            <span>Bake Rate</span>
             <select
               class="sample-creator-select"
               data-input="sample-creator-samplerate"
@@ -152,6 +134,64 @@
             </select>
           </label>
         </div>
+
+        <div class="sample-creator-render-controls">
+          <SampleCreatorRenderControlView
+            label="Render Note"
+            input-key="sample-creator-note"
+            :value="renderJob.midiNote"
+            :min="24"
+            :max="96"
+            :step="1"
+            :display-value="renderNoteLabel"
+          />
+          <SampleCreatorRenderControlView
+            label="Velocity"
+            input-key="sample-creator-velocity"
+            :value="renderJob.velocity"
+            :min="0.05"
+            :max="1"
+            :step="0.01"
+            :display-value="velocityLabel"
+          />
+          <SampleCreatorRenderControlView
+            label="Hold Time"
+            input-key="sample-creator-duration"
+            :value="renderJob.durationSeconds"
+            :min="0.05"
+            :max="6"
+            :step="0.05"
+            :display-value="holdTimeLabel"
+          />
+          <SampleCreatorRenderControlView
+            label="Release Tail"
+            input-key="sample-creator-tail"
+            :value="renderJob.tailSeconds"
+            :min="0"
+            :max="4"
+            :step="0.05"
+            :display-value="releaseTailLabel"
+          />
+          <SampleCreatorRenderControlView
+            label="Volume"
+            input-key="sample-creator-volume"
+            :value="renderJob.volume"
+            :min="0"
+            :max="64"
+            :step="1"
+            :display-value="volumeLabel"
+          />
+          <SampleCreatorRenderControlView
+            label="Fine Tune"
+            input-key="sample-creator-finetune"
+            :value="renderJob.fineTune"
+            :min="-8"
+            :max="7"
+            :step="1"
+            :display-value="fineTuneLabel"
+          />
+        </div>
+
         <div class="sample-creator-checks">
           <label><input
             type="checkbox"
@@ -164,42 +204,69 @@
             :checked="renderJob.fadeOut"
           /> Fade tail</label>
         </div>
+
         <div class="sample-creator-render-actions">
           <button
             type="button"
             class="toolbar-button"
-            data-action="sample-creator-preview-note"
-          >Preview one-shot</button>
+            data-action="sample-creator-preview-bake"
+          >Preview Baked Note</button>
           <button
             type="button"
-            class="toolbar-button"
-            data-action="sample-creator-stop"
-          >Stop live</button>
+            class="toolbar-button toolbar-button--primary"
+            data-action="sample-creator-bake"
+          >Bake to Target Slot</button>
+        </div>
+
+        <div class="sample-creator-last-render">
+          <strong>{{ lastRenderName }}</strong>
+          <span>{{ lastRenderSummary }}</span>
+          <span>{{ lastRenderPeak }}</span>
+        </div>
+      </section>
+
+      <section class="sample-creator-card sample-creator-card--capture">
+        <div class="sample-creator-card__head">
+          <div>
+            <p class="metric-label">Capture Performance</p>
+            <p class="hint">Record a live performance from MIDI or the on-screen keyboard, then commit it to the target slot.</p>
+          </div>
+          <span class="hint">{{ captureStateLabel }}</span>
+        </div>
+
+        <div class="sample-creator-capture-summary">
+          <strong>{{ captureInputLabel }}</strong>
+          <span>{{ captureSummary }}</span>
+        </div>
+
+        <div class="sample-creator-render-actions">
           <button
             type="button"
             :class="['toolbar-button', { 'is-active': snapshot.recordState === 'recording' }]"
-            data-action="sample-creator-record"
-          >{{ recordActionLabel }}</button>
+            data-action="sample-creator-capture"
+          >{{ captureActionLabel }}</button>
           <button
             type="button"
             class="toolbar-button"
-            data-action="sample-creator-bake"
-          >Bake to slot {{ targetSlotNumber }}</button>
+            data-action="sample-creator-stop-live"
+          >Stop Live Notes</button>
           <button
             type="button"
-            class="toolbar-button"
-            data-action="sample-creator-commit-recording"
+            class="toolbar-button toolbar-button--primary"
+            data-action="sample-creator-commit-capture"
             :disabled="snapshot.recordState !== 'captured'"
-          >Commit capture</button>
+          >Commit Capture to Target Slot</button>
           <button
             type="button"
             class="toolbar-button"
-            data-action="sample-creator-discard-recording"
+            data-action="sample-creator-discard-capture"
             :disabled="snapshot.recordState === 'idle'"
-          >Discard capture</button>
+          >Discard Capture</button>
         </div>
+
+        <SampleCreatorWaveformView :waveform="snapshot.recordedWaveform" />
         <p class="hint">{{ snapshot.status }}</p>
-      </div>
+      </section>
     </div>
 
     <div class="sample-creator-piano-card sample-creator-card">
@@ -234,33 +301,17 @@
         class="sample-creator-card"
       >
         <div class="sample-creator-card__head">
-          <p class="metric-label">{{ section.id }}</p>
+          <p class="metric-label">{{ section.label }}</p>
         </div>
         <div class="sample-creator-control-grid">
           <SampleCreatorControlView
             v-for="paramId in section.paramIds"
             :key="paramId"
+            :synth-id="snapshot.selectedSynth"
             :param-id="paramId"
             :value="snapshot.patch[paramId]"
           />
         </div>
-      </section>
-      <section class="sample-creator-card">
-        <div class="sample-creator-card__head">
-          <p class="metric-label">Last bake</p>
-        </div>
-        <div class="sample-creator-last-render">
-          <strong>{{ lastRenderName }}</strong>
-          <span>{{ lastRenderSummary }}</span>
-          <span>{{ lastRenderPeak }}</span>
-        </div>
-      </section>
-      <section class="sample-creator-card">
-        <div class="sample-creator-card__head">
-          <p class="metric-label">Recorded capture</p>
-          <span class="hint">{{ recordSummary }}</span>
-        </div>
-        <SampleCreatorWaveformView :waveform="snapshot.recordedWaveform" />
       </section>
     </div>
   </section>
@@ -277,19 +328,51 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
-import { SYNTH_DEFINITIONS, SYNTH_PARAMETERS, SYNTH_PRESETS } from '../../core/synthConfig';
+import { SYNTH_DEFINITIONS, SYNTH_PRESETS, getParameterDefinitionForSynth } from '../../core/synthConfig';
+import type { SampleSlot } from '../../core/trackerTypes';
 import type { SampleCreatorRenderOptions } from '../../ui-modern/components/appShellRenderer';
 import SampleCreatorControlView from './SampleCreatorControlView.vue';
 import SampleCreatorPianoView from './SampleCreatorPianoView.vue';
+import SampleCreatorRenderControlView from './SampleCreatorRenderControlView.vue';
 import SampleCreatorTelemetryPanel from './SampleCreatorTelemetryPanel.vue';
 import SampleCreatorWaveformView from './SampleCreatorWaveformView.vue';
 
 const props = defineProps<SampleCreatorRenderOptions>();
 
+const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+const SECTION_LABELS: Record<string, string> = {
+  oscillators: 'Oscillators',
+  amp: 'Amp',
+  filter: 'Filter',
+  motion: 'Motion',
+  fx: 'FX',
+  performance: 'Performance',
+};
+
+const formatSlotNumber = (slot: number): string => String(slot + 1).padStart(2, '0');
+const formatSlotLabel = (slot: number, name: string): string => `Slot ${formatSlotNumber(slot)} ${name || 'Empty slot'}`;
+const formatSampleSlotDisplay = (sample: SampleSlot | null, slotNumber: string): string => {
+  if (!sample) {
+    return 'Empty slot';
+  }
+
+  const trimmedName = sample.name.trim();
+  if (trimmedName.length > 0) {
+    return trimmedName;
+  }
+
+  return sample.length > 0 ? `SAMPLE ${slotNumber}` : 'Empty slot';
+};
+const formatMidiNote = (value: number): string => {
+  const midiNote = Math.round(value);
+  const octave = Math.floor(midiNote / 12) - 1;
+  return `${NOTE_NAMES[midiNote % 12] ?? 'C'}${octave}`;
+};
+
 const snapshot = computed(() => props.snapshot);
 const telemetry = computed(() => props.telemetry);
-const targetSample = computed(() => props.targetSample);
 const renderJob = computed(() => props.renderJob);
+const sampleSlots = computed(() => props.sampleSlots);
 const keyboardOctave = computed(() => props.keyboardOctave);
 const pianoStartAbsolute = computed(() => props.pianoStartAbsolute);
 const pianoEndAbsolute = computed(() => props.pianoEndAbsolute);
@@ -299,26 +382,29 @@ const pianoCanShiftUp = computed(() => props.pianoCanShiftUp);
 const pianoFlashNote = computed(() => props.pianoFlashNote);
 const pianoFlashToken = computed(() => props.pianoFlashToken);
 
-const definition = computed(() => SYNTH_DEFINITIONS[snapshot.value?.selectedSynth ?? 'core-sub']);
-const presets = computed(() => SYNTH_PRESETS.filter((preset) => preset.synth === (snapshot.value?.selectedSynth ?? 'core-sub')));
+const definition = computed(() => SYNTH_DEFINITIONS[snapshot.value?.selectedSynth ?? 'acid303']);
+const presets = computed(() => SYNTH_PRESETS.filter((preset) => preset.synth === (snapshot.value?.selectedSynth ?? 'acid303')));
 const controlSections = computed(() =>
   ['oscillators', 'amp', 'filter', 'motion', 'fx', 'performance']
     .map((sectionId) => ({
       id: sectionId,
-      paramIds: definition.value.parameterIds.filter((paramId) => SYNTH_PARAMETERS[paramId].section === sectionId),
+      label: SECTION_LABELS[sectionId] ?? sectionId,
+      paramIds: definition.value.parameterIds.filter((paramId) => getParameterDefinitionForSynth(definition.value.id, paramId).section === sectionId),
     }))
     .filter((section) => section.paramIds.length > 0),
 );
-const targetSlotNumber = computed(() => String((targetSample.value?.index ?? 0) + 1).padStart(2, '0'));
-const targetSampleLabel = computed(() => `${targetSlotNumber.value} ${targetSample.value?.name || 'Empty slot'}`);
+const selectedTargetSample = computed<SampleSlot | null>(() =>
+  sampleSlots.value[renderJob.value.targetSlot]
+  ?? props.targetSample
+  ?? null,
+);
+const targetSlotNumber = computed(() => formatSlotNumber(renderJob.value.targetSlot));
+const targetSampleLabel = computed(() => formatSampleSlotDisplay(selectedTargetSample.value, targetSlotNumber.value));
 const backendLabel = computed(() => {
   if (!snapshot.value) {
     return 'Unavailable';
   }
-  if (snapshot.value.backend === 'wasm') {
-    return 'Wasm core';
-  }
-  return 'Unavailable';
+  return snapshot.value.backend === 'wasm' ? 'Wasm core' : 'Unavailable';
 });
 const backendDetails = computed(() => {
   if (!snapshot.value) {
@@ -338,14 +424,43 @@ const bakeRateOptions = [
   { value: 22050, label: '22.05 kHz' },
   { value: 11025, label: '11.025 kHz' },
 ];
-const recordActionLabel = computed(() => snapshot.value?.recordState === 'recording' ? 'Stop record' : 'Start record');
+const captureActionLabel = computed(() => snapshot.value?.recordState === 'recording' ? 'Stop Capture' : 'Start Capture');
+const captureStateLabel = computed(() => {
+  switch (snapshot.value?.recordState) {
+    case 'recording':
+      return 'Capturing live performance';
+    case 'captured':
+      return `Ready for Slot ${targetSlotNumber.value}`;
+    default:
+      return 'Idle';
+  }
+});
+const captureInputLabel = computed(() =>
+  `MIDI ${snapshot.value?.midiAvailable ? 'connected' : 'not connected'} | Input armed to ${snapshot.value?.inputArm ?? 'synth'}`,
+);
+const midiInputLabel = computed(() => snapshot.value?.midiAvailable ? 'MIDI connected' : 'MIDI not connected');
 const activeNotes = computed(() => new Set(snapshot.value?.activeNotes ?? []));
-const lastRenderName = computed(() => snapshot.value?.lastRender?.name ?? 'No rendered sample yet');
+const renderNoteLabel = computed(() => `${formatMidiNote(renderJob.value.midiNote)} (${Math.round(renderJob.value.midiNote)})`);
+const velocityLabel = computed(() => `${Math.round(renderJob.value.velocity * 100)}%`);
+const holdTimeLabel = computed(() => `${renderJob.value.durationSeconds.toFixed(renderJob.value.durationSeconds < 1 ? 2 : 1)} s`);
+const releaseTailLabel = computed(() => `${renderJob.value.tailSeconds.toFixed(renderJob.value.tailSeconds < 1 ? 2 : 1)} s`);
+const volumeLabel = computed(() => String(Math.round(renderJob.value.volume)));
+const fineTuneLabel = computed(() => renderJob.value.fineTune > 0 ? `+${Math.round(renderJob.value.fineTune)}` : String(Math.round(renderJob.value.fineTune)));
+const lastRenderName = computed(() => snapshot.value?.lastRender?.name ?? 'No baked sample yet');
 const lastRenderSummary = computed(() => snapshot.value?.lastRender
-  ? `${snapshot.value.lastRender.data.length} samples at ${snapshot.value.lastRender.sampleRate} Hz`
-  : 'Render a sample to populate the tracker slot.');
+  ? `${snapshot.value.lastRender.data.length} samples at ${snapshot.value.lastRender.sampleRate} Hz into Slot ${targetSlotNumber.value}`
+  : `Bake a sample to import it into Slot ${targetSlotNumber.value}.`);
 const lastRenderPeak = computed(() => snapshot.value?.lastRender ? `Peak ${Math.round(snapshot.value.lastRender.peak * 100)}%` : '');
-const recordSummary = computed(() => snapshot.value?.recordState === 'captured'
-  ? `${snapshot.value.recordedDurationSeconds.toFixed(2)} s | Peak ${Math.round(snapshot.value.recordedPeak * 100)}%`
-  : (snapshot.value?.recordState ?? 'idle'));
+const captureSummary = computed(() => {
+  if (!snapshot.value) {
+    return 'Waiting for synth engine.';
+  }
+  if (snapshot.value.recordState === 'captured') {
+    return `${snapshot.value.recordedDurationSeconds.toFixed(2)} s | Peak ${Math.round(snapshot.value.recordedPeak * 100)}%`;
+  }
+  if (snapshot.value.recordState === 'recording') {
+    return 'Recording live synth output now.';
+  }
+  return `Capture a live performance, then commit it to Slot ${targetSlotNumber.value}.`;
+});
 </script>
