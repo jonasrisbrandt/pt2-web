@@ -13,6 +13,7 @@ import {
   Volume2,
   VolumeX,
 } from 'lucide';
+import type { InputArmTarget } from '../../core/synthTypes';
 import type { TransportMode, TrackerSnapshot } from '../../core/trackerTypes';
 import { formatSongTime, getVisualizationLabel, type VisualizationMode } from '../../ui/appShared';
 import type {
@@ -31,7 +32,7 @@ import type { SampleEditorPanelRenderOptions, SelectedSamplePanelRenderOptions }
 import type { InlineNameFieldRenderOptions } from '../../ui-modern/components/viewModels';
 
 type SectionKey = 'module' | 'visualization' | 'editor' | 'samples';
-type MenuKey = 'file' | 'help';
+type MenuKey = 'file' | 'settings' | 'help';
 type ViewMode = 'modern' | 'classic';
 type WorkspaceMode = 'tracker' | 'sample-creator';
 
@@ -56,6 +57,8 @@ interface BuildTrackerShellViewStateOptions {
   fileActionsDisabled: boolean;
   importDisabled: boolean;
   sampleCreatorOptions: SampleCreatorRenderOptions | null;
+  synthInputArm: InputArmTarget | null;
+  synthSettingsAvailable: boolean;
   canEditSnapshot: (snapshot: TrackerSnapshot) => boolean;
   getSectionCollapseIcon: (section: SectionKey) => string;
   renderIcon: (iconNode: unknown) => string;
@@ -282,6 +285,8 @@ export const buildTrackerShellViewState = ({
   fileActionsDisabled,
   importDisabled,
   sampleCreatorOptions,
+  synthInputArm,
+  synthSettingsAvailable,
   canEditSnapshot,
   getSectionCollapseIcon,
   renderIcon,
@@ -316,7 +321,10 @@ export const buildTrackerShellViewState = ({
     classicDebugOptions,
     samplePageControlOptions: buildTrackerSamplePageControlOptions(samplePage, samplePageCount, renderIcon),
     fileMenuOpen: openMenu === 'file',
+    settingsMenuOpen: openMenu === 'settings',
     helpMenuOpen: openMenu === 'help',
+    synthInputArm,
+    synthSettingsAvailable,
     aboutOpen,
     appVersion,
     fileActionsDisabled,

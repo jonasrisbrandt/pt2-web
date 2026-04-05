@@ -7,6 +7,7 @@ export interface SynthEngine {
   getSnapshot(): SynthSnapshot;
   getTelemetry(): SynthTelemetrySnapshot | null;
   renderSample(job: RenderJob): Promise<RenderedSample>;
+  peekRecordedSample(job: RenderJob): RenderedSample | null;
   getRecordedSample(job: RenderJob): RenderedSample | null;
   subscribe(listener: (event: SynthEvent) => void): () => void;
 }

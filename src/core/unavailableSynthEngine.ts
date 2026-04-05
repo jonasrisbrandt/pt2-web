@@ -58,6 +58,10 @@ export class UnavailableSynthEngine implements SynthEngine {
     throw new Error(this.snapshot.backendError ?? 'The synth engine is unavailable.');
   }
 
+  peekRecordedSample(_job: RenderJob): RenderedSample | null {
+    return null;
+  }
+
   getRecordedSample(_job: RenderJob): RenderedSample | null {
     return null;
   }

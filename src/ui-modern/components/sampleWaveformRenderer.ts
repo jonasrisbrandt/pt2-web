@@ -30,8 +30,17 @@ interface WaveformRenderCache {
   canvas: HTMLCanvasElement;
 }
 
+interface WaveformSampleLike {
+  index: number;
+  dataRevision: number;
+  length: number;
+  loopStart: number;
+  loopLength: number;
+}
+
 const selectedSamplePreviewCaches = new WeakMap<HTMLCanvasElement, WaveformRenderCache>();
 const sampleEditorCaches = new WeakMap<HTMLCanvasElement, WaveformRenderCache>();
+const standaloneSampleEditorCaches = new WeakMap<HTMLCanvasElement, WaveformRenderCache>();
 
 const createCacheCanvas = (): HTMLCanvasElement => document.createElement('canvas');
 
@@ -63,7 +72,7 @@ const drawCachedBase = (
 };
 
 const getPreviewRenderKey = (
-  sample: SampleSlot,
+  sample: WaveformSampleLike,
   width: number,
   height: number,
   dpr: number,
@@ -79,7 +88,7 @@ const getPreviewRenderKey = (
 ].join(':');
 
 const getEditorRenderKey = (
-  sample: SampleSlot,
+  sample: WaveformSampleLike,
   width: number,
   height: number,
   dpr: number,
@@ -346,7 +355,7 @@ const renderSelectedSamplePreviewBase = (
   ctx: CanvasRenderingContext2D,
   width: number,
   height: number,
-  sample: SampleSlot,
+  sample: WaveformSampleLike,
   data: Int8Array,
   drawRoundedRect: RoundedRectDrawer,
 ): void => {
@@ -393,7 +402,7 @@ const renderSampleEditorBase = (
   ctx: CanvasRenderingContext2D,
   width: number,
   height: number,
-  sample: SampleSlot,
+  sample: WaveformSampleLike,
   data: Int8Array,
   view: SampleEditorView,
   selection: { start: number | null; end: number | null },
@@ -520,6 +529,19 @@ export interface SampleEditorRenderOptions {
   drawRoundedRect: RoundedRectDrawer;
 }
 
+export interface StandaloneSampleEditorRenderOptions {
+  canvas: HTMLCanvasElement;
+  data: Int8Array;
+  height: number;
+  view: SampleEditorView;
+  revision: number;
+  previewPlayheadOffset?: number | null;
+  loopStart?: number;
+  loopLength?: number;
+  emptyMessage?: string;
+  drawRoundedRect: RoundedRectDrawer;
+}
+
 export const drawSampleEditor = ({
   canvas,
   snapshot,
@@ -578,6 +600,86 @@ export const drawSampleEditor = ({
   drawCachedBase(ctx, cache.canvas);
 
   if (previewPlayheadOffset !== null && previewPlayheadOffset >= view.start && previewPlayheadOffset <= view.end) {
+    const layout = getSampleEditorLayout(width, height);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    drawPlayheadMarker(ctx, drawRoundedRect, sampleOffsetToEditorX(previewPlayheadOffset, view, layout), layout.top, layout.height);
+  }
+};
+
+export const drawStandaloneSampleEditor = ({
+  canvas,
+  data,
+  height,
+  view,
+  revision,
+  previewPlayheadOffset = null,
+  loopStart = 0,
+  loopLength = 2,
+  emptyMessage = 'No sample data available',
+  drawRoundedRect,
+}: StandaloneSampleEditorRenderOptions): void => {
+  const widthSource = canvas.parentElement?.clientWidth
+    || canvas.getBoundingClientRect().width
+    || 960;
+  if (widthSource <= 0) {
+    return;
+  }
+
+  const width = Math.max(420, Math.round(widthSource));
+  const dpr = window.devicePixelRatio || 1;
+  const ctx = ensureCanvasSize(canvas, width, height, dpr);
+  if (!ctx) {
+    return;
+  }
+
+  const sample: WaveformSampleLike = {
+    index: 0,
+    dataRevision: revision,
+    length: data.length,
+    loopStart,
+    loopLength,
+  };
+  const selection = { start: null, end: null };
+  const loop = { start: loopStart, end: loopStart + loopLength };
+  const renderKey = `${getEditorRenderKey(sample, width, height, dpr, view, selection, loop)}:${emptyMessage}`;
+  let cache = standaloneSampleEditorCaches.get(canvas);
+  if (!cache) {
+    cache = {
+      key: '',
+      canvas: createCacheCanvas(),
+    };
+    standaloneSampleEditorCaches.set(canvas, cache);
+  }
+
+  if (cache.key !== renderKey) {
+    const cacheCtx = ensureCanvasSize(cache.canvas, width, height, dpr);
+    if (!cacheCtx) {
+      return;
+    }
+
+    cacheCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    renderSampleEditorBase(cacheCtx, width, height, sample, data, view, selection, loop, drawRoundedRect);
+    if (data.length <= 0) {
+      cacheCtx.clearRect(0, 0, width, height);
+      cacheCtx.fillStyle = 'rgba(8, 13, 10, 0.92)';
+      drawRoundedRect(cacheCtx, 0, 0, width, height, 18);
+      cacheCtx.fill();
+      cacheCtx.fillStyle = 'rgba(255, 255, 255, 0.035)';
+      const layout = getSampleEditorLayout(width, height);
+      drawRoundedRect(cacheCtx, layout.left, layout.top, layout.width, layout.height, 14);
+      cacheCtx.fill();
+      cacheCtx.fillStyle = 'rgba(239, 248, 231, 0.52)';
+      cacheCtx.font = '15px "Trebuchet MS", "Segoe UI", sans-serif';
+      cacheCtx.textAlign = 'center';
+      cacheCtx.textBaseline = 'middle';
+      cacheCtx.fillText(emptyMessage, width / 2, height / 2);
+    }
+    cache.key = renderKey;
+  }
+
+  drawCachedBase(ctx, cache.canvas);
+
+  if (previewPlayheadOffset !== null && data.length > 0 && previewPlayheadOffset >= view.start && previewPlayheadOffset <= view.end) {
     const layout = getSampleEditorLayout(width, height);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     drawPlayheadMarker(ctx, drawRoundedRect, sampleOffsetToEditorX(previewPlayheadOffset, view, layout), layout.top, layout.height);

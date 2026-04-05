@@ -14,6 +14,13 @@
         >File</button>
         <button
           type="button"
+          :class="['menu-trigger', { 'is-open': settingsMenuOpen }]"
+          data-action="toggle-menu-settings"
+          data-menu-trigger="settings"
+          :aria-expanded="settingsMenuOpen ? 'true' : 'false'"
+        >Settings</button>
+        <button
+          type="button"
           :class="['menu-trigger', { 'is-open': helpMenuOpen }]"
           data-action="toggle-menu-help"
           data-menu-trigger="help"
@@ -61,6 +68,24 @@
         action="import-samples"
         label="Import samples..."
         :disabled="importDisabled"
+      />
+    </div>
+
+    <div
+      :class="['menu-surface', 'menu-surface--settings', { 'is-open': settingsMenuOpen }]"
+      data-menu-panel="settings"
+    >
+      <MenuItemButton
+        action="settings-arm-synth"
+        label="Arm Synth"
+        :disabled="!synthSettingsAvailable"
+        :subtle="synthInputArm === 'synth' ? 'Active' : undefined"
+      />
+      <MenuItemButton
+        action="settings-arm-tracker"
+        label="Arm Tracker"
+        :disabled="!synthSettingsAvailable"
+        :subtle="synthInputArm === 'tracker' ? 'Active' : undefined"
       />
     </div>
 

@@ -12,16 +12,6 @@
       <div class="sample-creator-head__actions">
         <button
           type="button"
-          :class="['toolbar-button', { 'is-active': snapshot.inputArm === 'synth' }]"
-          data-action="sample-creator-arm-synth"
-        >Arm Synth</button>
-        <button
-          type="button"
-          :class="['toolbar-button', { 'is-active': snapshot.inputArm === 'tracker' }]"
-          data-action="sample-creator-arm-tracker"
-        >Arm Tracker</button>
-        <button
-          type="button"
           class="toolbar-button"
           data-action="sample-creator-close"
         >Back to tracker</button>
@@ -31,37 +21,46 @@
     <div class="sample-creator-meta">
       <section class="sample-creator-card">
         <div class="sample-creator-card__head">
-          <p class="metric-label">Target Slot</p>
+          <p class="metric-label">Target</p>
           <strong class="sample-creator-target">Slot {{ targetSlotNumber }}</strong>
         </div>
         <strong class="sample-creator-target">{{ targetSampleLabel }}</strong>
-        <label class="sample-creator-select-wrap">
-          <span class="metric-label">Import destination</span>
-          <select
-            class="sample-creator-select"
-            data-input="sample-creator-target-slot"
-          >
-            <option
-              v-for="slot in sampleSlots"
-              :key="slot.index"
-              :value="slot.index"
-              :selected="slot.index === renderJob.targetSlot"
-            >{{ formatSlotLabel(slot.index, slot.name) }}</option>
-          </select>
-        </label>
+        <div class="sample-creator-render-grid sample-creator-render-grid--meta">
+          <label class="sample-creator-select-wrap sample-creator-inline-field sample-creator-inline-field--wide">
+            <span class="metric-label">Slot</span>
+            <select
+              class="sample-creator-select"
+              data-input="sample-creator-target-slot"
+            >
+              <option
+                v-for="slot in sampleSlots"
+                :key="slot.index"
+                :value="slot.index"
+                :selected="slot.index === renderJob.targetSlot"
+              >{{ formatSlotLabel(slot.index, slot.name) }}</option>
+            </select>
+          </label>
+          <label class="sample-creator-select-wrap sample-creator-inline-field">
+            <span class="metric-label">Bake rate</span>
+            <select
+              class="sample-creator-select"
+              data-input="sample-creator-samplerate"
+            >
+              <option
+                v-for="option in bakeRateOptions"
+                :key="option.value"
+                :value="option.value"
+                :selected="option.value === snapshot.bakeSampleRate"
+              >{{ option.label }}</option>
+            </select>
+          </label>
+        </div>
         <p class="hint">
           Bake and capture both write to this slot.
           <template v-if="selectedTargetSample">
             {{ selectedTargetSample.length > 0 ? ` Current length ${selectedTargetSample.length} bytes.` : ' Slot is currently empty.' }}
           </template>
         </p>
-      </section>
-      <section class="sample-creator-card">
-        <div class="sample-creator-card__head">
-          <p class="metric-label">Backend</p>
-          <strong class="sample-creator-target">{{ backendLabel }}</strong>
-        </div>
-        <p class="hint">{{ backendDetails }}</p>
       </section>
       <section class="sample-creator-card">
         <div class="sample-creator-card__head">
@@ -109,31 +108,25 @@
           <span class="hint">Slot {{ targetSlotNumber }}</span>
         </div>
 
-        <div class="sample-creator-render-grid sample-creator-render-grid--meta">
-          <label class="sample-creator-inline-field sample-creator-inline-field--wide">
-            <span>Sample Name</span>
-            <input
-              type="text"
-              data-input="sample-creator-name"
-              :value="renderJob.sampleName"
-              maxlength="22"
-            />
-          </label>
-          <label class="sample-creator-inline-field">
-            <span>Bake Rate</span>
-            <select
-              class="sample-creator-select"
-              data-input="sample-creator-samplerate"
-            >
-              <option
-                v-for="option in bakeRateOptions"
-                :key="option.value"
-                :value="option.value"
-                :selected="option.value === snapshot.bakeSampleRate"
-              >{{ option.label }}</option>
-            </select>
-          </label>
+        <div class="sample-creator-action-toolbar">
+          <ToolIconButtonView
+            action="sample-creator-preview-bake"
+            :icon-html="playIconHtml"
+            label="Preview baked note"
+          />
+          <ToolIconButtonView
+            action="sample-creator-toggle-bake-learn"
+            :icon-html="recordIconHtml"
+            :label="bakeLearnEnabled ? 'Stop bake learn' : 'Learn from live note'"
+            :active="bakeLearnEnabled"
+          />
+          <ToolIconButtonView
+            action="sample-creator-bake"
+            :icon-html="bakeIconHtml"
+            label="Bake to target slot"
+          />
         </div>
+        <p class="hint">Play a note from MIDI or the piano to update render note, velocity, and hold time.</p>
 
         <div class="sample-creator-render-controls">
           <SampleCreatorRenderControlView
@@ -144,6 +137,7 @@
             :max="96"
             :step="1"
             :display-value="renderNoteLabel"
+            :helper-text="renderNoteHelper"
           />
           <SampleCreatorRenderControlView
             label="Velocity"
@@ -193,29 +187,22 @@
         </div>
 
         <div class="sample-creator-checks">
-          <label><input
-            type="checkbox"
-            data-input="sample-creator-normalize"
-            :checked="renderJob.normalize"
-          /> Normalize</label>
-          <label><input
-            type="checkbox"
-            data-input="sample-creator-fadeout"
-            :checked="renderJob.fadeOut"
-          /> Fade tail</label>
-        </div>
-
-        <div class="sample-creator-render-actions">
-          <button
-            type="button"
-            class="toolbar-button"
-            data-action="sample-creator-preview-bake"
-          >Preview Baked Note</button>
-          <button
-            type="button"
-            class="toolbar-button toolbar-button--primary"
-            data-action="sample-creator-bake"
-          >Bake to Target Slot</button>
+          <label class="sample-creator-check">
+            <input
+              type="checkbox"
+              data-input="sample-creator-normalize"
+              :checked="renderJob.normalize"
+            />
+            <span>Normalize</span>
+          </label>
+          <label class="sample-creator-check">
+            <input
+              type="checkbox"
+              data-input="sample-creator-fadeout"
+              :checked="renderJob.fadeOut"
+            />
+            <span>Fade tail</span>
+          </label>
         </div>
 
         <div class="sample-creator-last-render">
@@ -239,32 +226,37 @@
           <span>{{ captureSummary }}</span>
         </div>
 
-        <div class="sample-creator-render-actions">
-          <button
-            type="button"
-            :class="['toolbar-button', { 'is-active': snapshot.recordState === 'recording' }]"
-            data-action="sample-creator-capture"
-          >{{ captureActionLabel }}</button>
-          <button
-            type="button"
-            class="toolbar-button"
-            data-action="sample-creator-stop-live"
-          >Stop Live Notes</button>
-          <button
-            type="button"
-            class="toolbar-button toolbar-button--primary"
-            data-action="sample-creator-commit-capture"
-            :disabled="snapshot.recordState !== 'captured'"
-          >Commit Capture to Target Slot</button>
-          <button
-            type="button"
-            class="toolbar-button"
-            data-action="sample-creator-discard-capture"
+        <div class="sample-creator-action-toolbar">
+          <ToolIconButtonView
+            action="sample-creator-capture"
+            :icon-html="snapshot.recordState === 'recording' ? stopIconHtml : recordIconHtml"
+            :label="captureActionLabel"
+            :active="snapshot.recordState === 'recording'"
+          />
+          <ToolIconButtonView
+            action="sample-creator-play-capture"
+            :icon-html="playIconHtml"
+            label="Play captured sample"
+            :disabled="!capturedSample"
+          />
+          <ToolIconButtonView
+            action="sample-creator-commit-capture"
+            :icon-html="bakeIconHtml"
+            label="Commit capture to target slot"
+            :disabled="!capturedSample"
+          />
+          <ToolIconButtonView
+            action="sample-creator-discard-capture"
+            :icon-html="deleteIconHtml"
+            label="Discard capture"
             :disabled="snapshot.recordState === 'idle'"
-          >Discard Capture</button>
+          />
         </div>
 
-        <SampleCreatorWaveformView :waveform="snapshot.recordedWaveform" />
+        <SampleWaveformDisplayView
+          :sample="capturedSample"
+          empty-message="No recorded capture yet."
+        />
         <p class="hint">{{ snapshot.status }}</p>
       </section>
     </div>
@@ -335,7 +327,8 @@ import SampleCreatorControlView from './SampleCreatorControlView.vue';
 import SampleCreatorPianoView from './SampleCreatorPianoView.vue';
 import SampleCreatorRenderControlView from './SampleCreatorRenderControlView.vue';
 import SampleCreatorTelemetryPanel from './SampleCreatorTelemetryPanel.vue';
-import SampleCreatorWaveformView from './SampleCreatorWaveformView.vue';
+import SampleWaveformDisplayView from './SampleWaveformDisplayView.vue';
+import ToolIconButtonView from './ToolIconButtonView.vue';
 
 const props = defineProps<SampleCreatorRenderOptions>();
 
@@ -365,7 +358,7 @@ const formatSampleSlotDisplay = (sample: SampleSlot | null, slotNumber: string):
 };
 const formatMidiNote = (value: number): string => {
   const midiNote = Math.round(value);
-  const octave = Math.floor(midiNote / 12) - 1;
+  const octave = Math.floor(midiNote / 12);
   return `${NOTE_NAMES[midiNote % 12] ?? 'C'}${octave}`;
 };
 
@@ -381,6 +374,13 @@ const pianoCanShiftDown = computed(() => props.pianoCanShiftDown);
 const pianoCanShiftUp = computed(() => props.pianoCanShiftUp);
 const pianoFlashNote = computed(() => props.pianoFlashNote);
 const pianoFlashToken = computed(() => props.pianoFlashToken);
+const bakeLearnEnabled = computed(() => props.bakeLearnEnabled);
+const capturedSample = computed(() => props.capturedSample);
+const playIconHtml = computed(() => props.playIconHtml);
+const stopIconHtml = computed(() => props.stopIconHtml);
+const recordIconHtml = computed(() => props.recordIconHtml);
+const bakeIconHtml = computed(() => props.bakeIconHtml);
+const deleteIconHtml = computed(() => props.deleteIconHtml);
 
 const definition = computed(() => SYNTH_DEFINITIONS[snapshot.value?.selectedSynth ?? 'acid303']);
 const presets = computed(() => SYNTH_PRESETS.filter((preset) => preset.synth === (snapshot.value?.selectedSynth ?? 'acid303')));
@@ -400,24 +400,6 @@ const selectedTargetSample = computed<SampleSlot | null>(() =>
 );
 const targetSlotNumber = computed(() => formatSlotNumber(renderJob.value.targetSlot));
 const targetSampleLabel = computed(() => formatSampleSlotDisplay(selectedTargetSample.value, targetSlotNumber.value));
-const backendLabel = computed(() => {
-  if (!snapshot.value) {
-    return 'Unavailable';
-  }
-  return snapshot.value.backend === 'wasm' ? 'Wasm core' : 'Unavailable';
-});
-const backendDetails = computed(() => {
-  if (!snapshot.value) {
-    return 'Synth engine is not ready yet.';
-  }
-  if (snapshot.value.backendError) {
-    return `Error: ${snapshot.value.backendError}`;
-  }
-  if (snapshot.value.previewSampleRate) {
-    return `Preview ${snapshot.value.previewSampleRate} Hz | Bake ${snapshot.value.bakeSampleRate} Hz`;
-  }
-  return `Bake ${snapshot.value.bakeSampleRate} Hz`;
-});
 const bakeRateOptions = [
   { value: 48000, label: '48 kHz' },
   { value: 44100, label: '44.1 kHz' },
@@ -440,7 +422,8 @@ const captureInputLabel = computed(() =>
 );
 const midiInputLabel = computed(() => snapshot.value?.midiAvailable ? 'MIDI connected' : 'MIDI not connected');
 const activeNotes = computed(() => new Set(snapshot.value?.activeNotes ?? []));
-const renderNoteLabel = computed(() => `${formatMidiNote(renderJob.value.midiNote)} (${Math.round(renderJob.value.midiNote)})`);
+const renderNoteLabel = computed(() => formatMidiNote(renderJob.value.midiNote));
+const renderNoteHelper = computed(() => `MIDI ${Math.round(renderJob.value.midiNote)}`);
 const velocityLabel = computed(() => `${Math.round(renderJob.value.velocity * 100)}%`);
 const holdTimeLabel = computed(() => `${renderJob.value.durationSeconds.toFixed(renderJob.value.durationSeconds < 1 ? 2 : 1)} s`);
 const releaseTailLabel = computed(() => `${renderJob.value.tailSeconds.toFixed(renderJob.value.tailSeconds < 1 ? 2 : 1)} s`);
@@ -455,11 +438,14 @@ const captureSummary = computed(() => {
   if (!snapshot.value) {
     return 'Waiting for synth engine.';
   }
-  if (snapshot.value.recordState === 'captured') {
+  if (capturedSample.value) {
     return `${snapshot.value.recordedDurationSeconds.toFixed(2)} s | Peak ${Math.round(snapshot.value.recordedPeak * 100)}%`;
   }
   if (snapshot.value.recordState === 'recording') {
     return 'Recording live synth output now.';
+  }
+  if (snapshot.value.recordState === 'captured') {
+    return 'Captured audio is empty after trim.';
   }
   return `Capture a live performance, then commit it to Slot ${targetSlotNumber.value}.`;
 });

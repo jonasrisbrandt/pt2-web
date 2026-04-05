@@ -1,7 +1,7 @@
 import type { SampleSlot } from '../../core/trackerTypes';
 import type { SelectedSamplePanelRenderOptions } from './markupRenderer';
 import type { InlineNameFieldRenderOptions } from './viewModels';
-import type { RenderJob, SynthSnapshot, SynthTelemetrySnapshot } from '../../core/synthTypes';
+import type { InputArmTarget, RenderJob, RenderedSample, SynthSnapshot, SynthTelemetrySnapshot } from '../../core/synthTypes';
 
 export interface SampleBankRenderItem {
   sample: SampleSlot;
@@ -90,6 +90,13 @@ export interface SampleCreatorRenderOptions {
   pianoCanShiftUp: boolean;
   pianoFlashNote: number | null;
   pianoFlashToken: number;
+  bakeLearnEnabled: boolean;
+  capturedSample: RenderedSample | null;
+  playIconHtml: string;
+  stopIconHtml: string;
+  recordIconHtml: string;
+  bakeIconHtml: string;
+  deleteIconHtml: string;
 }
 
 export interface AppShellRenderOptions {
@@ -112,7 +119,10 @@ export interface AppShellRenderOptions {
   classicDebugOptions: ClassicDebugRenderOptions;
   samplePageControlOptions: IconButtonRenderOptions[];
   fileMenuOpen: boolean;
+  settingsMenuOpen: boolean;
   helpMenuOpen: boolean;
+  synthInputArm: InputArmTarget | null;
+  synthSettingsAvailable: boolean;
   aboutOpen: boolean;
   appVersion: string;
   fileActionsDisabled: boolean;

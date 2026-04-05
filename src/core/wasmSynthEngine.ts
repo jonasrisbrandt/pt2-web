@@ -185,6 +185,14 @@ export class WasmSynthEngine implements SynthEngine {
         this.snapshot.recordedDurationSeconds = 0;
         this.snapshot.recordedPeak = 0;
         this.previewDriver?.startRecording();
+        void this.previewDriver?.ensureStarted().catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          this.previewDriver?.discardRecording();
+          this.snapshot.recordState = 'idle';
+          this.snapshot.backendError = message;
+          this.snapshot.status = `Synth preview error: ${message}`;
+          this.emitSnapshot();
+        });
         this.snapshot.status = `Capturing live performance for ${formatSlotLabel(this.snapshot.targetSampleSlot)}...`;
         break;
       case 'record/stop': {
@@ -276,12 +284,16 @@ export class WasmSynthEngine implements SynthEngine {
     return rendered;
   }
 
-  getRecordedSample(job: RenderJob): RenderedSample | null {
+  peekRecordedSample(job: RenderJob): RenderedSample | null {
     if (!this.recordedAudio) {
       return null;
     }
 
-    const rendered = buildRenderedSampleFromCapture(this.recordedAudio, job);
+    return buildRenderedSampleFromCapture(this.recordedAudio, job);
+  }
+
+  getRecordedSample(job: RenderJob): RenderedSample | null {
+    const rendered = this.peekRecordedSample(job);
     if (!rendered) {
       return null;
     }
