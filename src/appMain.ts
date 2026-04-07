@@ -88,6 +88,8 @@ import {
   buildTrackerSampleEditorPanelOptions,
   buildTrackerSelectedSamplePanelOptions,
 } from './ui-vue/controllers/trackerSampleViewController';
+import { buildSampleCreatorViewModel } from './ui-vue/controllers/sampleCreatorViewModel';
+import { getWaveformScrollbarThumbWidth } from './ui-vue/composables/waveformViewport';
 import { renderAppShellView } from './ui-vue/renderers/renderAppShellView';
 import { renderModuleGridView } from './ui-vue/renderers/renderModuleGridView';
 import { renderModuleTransportControlsView } from './ui-vue/renderers/renderModuleTransportControlsView';
@@ -112,7 +114,6 @@ import {
   syncPianoNotes as syncModernPianoNotes,
   triggerPianoGlow as triggerModernPianoGlow,
 } from './ui-modern/components/visualizationRenderer';
-import { resolvePianoKeyFromCanvasPointer } from './ui/pianoCanvasShared';
 import { createTrackerAppDom } from './ui-modern/session/appDom';
 import { uiPerfMonitor } from './perf/uiPerfMonitor';
 import { TrackerSignalTrailsFrameSource, TrackerSpectrumFrameSource } from './visualization-adapters/trackerVisualizationAdapter';
@@ -1899,6 +1900,172 @@ export class TrackerApplication {
       0,
       SAMPLE_CREATOR_PIANO_RANGES.length - 1,
     );
+    this.render();
+  }
+
+  private closeSampleCreatorWorkspace(): void {
+    this.workspaceMode = 'tracker';
+    this.stopSynthPreview();
+    this.syncPlaybackCoordinator();
+    this.render();
+  }
+
+  private setSampleCreatorTargetSlot(slot: number): void {
+    if (!this.synthEngine) {
+      return;
+    }
+
+    const clampedSlot = clamp(Math.round(slot), 0, 30);
+    this.sampleCreatorState.targetSlot = clampedSlot;
+    this.synthEngine.dispatch({ type: 'target-slot/set', slot: clampedSlot });
+    this.render();
+  }
+
+  private setSampleCreatorBakeRate(sampleRate: number): void {
+    if (!this.synthEngine) {
+      return;
+    }
+
+    const clampedRate = clamp(Math.round(sampleRate), 11025, 48000);
+    this.sampleCreatorState.sampleRate = clampedRate;
+    this.synthEngine.dispatch({ type: 'bake-rate/set', sampleRate: clampedRate });
+    this.refreshSampleCreatorCapturedSample();
+    this.render();
+  }
+
+  private selectSampleCreatorSynth(synth: SynthId): void {
+    if (!this.synthEngine) {
+      return;
+    }
+
+    this.synthEngine.dispatch({ type: 'synth/select', synth });
+    this.sampleCreatorState.sampleName = synth.slice(0, 22);
+  }
+
+  private selectSampleCreatorPreset(presetId: string): void {
+    if (!this.synthEngine) {
+      return;
+    }
+
+    this.synthEngine.dispatch({ type: 'preset/load', presetId });
+    this.sampleCreatorState.sampleName = presetId.split(':')[1]?.slice(0, 22) ?? this.sampleCreatorState.sampleName;
+  }
+
+  private updateSampleCreatorBakeControl(
+    id: 'midiNote' | 'velocity' | 'durationSeconds' | 'tailSeconds' | 'volume' | 'fineTune',
+    value: number,
+  ): void {
+    switch (id) {
+      case 'midiNote':
+        this.sampleCreatorState.midiNote = clamp(Number(value), 24, 96);
+        break;
+      case 'velocity':
+        this.sampleCreatorState.velocity = clamp(Number(value), 0.05, 1);
+        break;
+      case 'durationSeconds':
+        this.sampleCreatorState.durationSeconds = clamp(Number(value), 0.05, 6);
+        break;
+      case 'tailSeconds':
+        this.sampleCreatorState.tailSeconds = clamp(Number(value), 0, 4);
+        break;
+      case 'volume':
+        this.sampleCreatorState.volume = clamp(Number(value), 0, 64);
+        break;
+      case 'fineTune':
+        this.sampleCreatorState.fineTune = clamp(Number(value), -8, 7);
+        break;
+    }
+
+    this.refreshSampleCreatorCapturedSample();
+    this.render();
+  }
+
+  private setSampleCreatorNormalize(enabled: boolean): void {
+    this.sampleCreatorState.normalize = enabled;
+    this.refreshSampleCreatorCapturedSample();
+    this.render();
+  }
+
+  private setSampleCreatorFadeOut(enabled: boolean): void {
+    this.sampleCreatorState.fadeOut = enabled;
+    this.refreshSampleCreatorCapturedSample();
+    this.render();
+  }
+
+  private toggleSampleCreatorBakeLearn(): void {
+    this.sampleCreatorBakeLearnEnabled = !this.sampleCreatorBakeLearnEnabled;
+    if (!this.sampleCreatorBakeLearnEnabled) {
+      this.sampleCreatorBakeLearnState = null;
+    }
+    if (this.synthSnapshot) {
+      this.synthSnapshot.status = this.sampleCreatorBakeLearnEnabled
+        ? 'Bake learn armed. Play a note to update render note, velocity, and hold time.'
+        : 'Bake learn stopped.';
+    }
+    this.render();
+  }
+
+  private async runSampleCreatorBake(): Promise<void> {
+    try {
+      await this.bakeSampleCreatorSample();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Bake failed.';
+      if (this.synthSnapshot) {
+        this.synthSnapshot.status = message;
+      }
+      console.error('Sample Creator bake failed.', error);
+      this.render();
+    }
+  }
+
+  private toggleSampleCreatorCapture(): void {
+    if (!this.synthEngine || !this.synthSnapshot) {
+      return;
+    }
+
+    this.synthEngine.dispatch({ type: this.synthSnapshot.recordState === 'recording' ? 'record/stop' : 'record/start' });
+  }
+
+  private discardSampleCreatorCapture(): void {
+    this.synthEngine?.dispatch({ type: 'record/discard' });
+  }
+
+  private commitSampleCreatorCapture(): void {
+    try {
+      this.commitRecordedSampleCreatorSample();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Capture import failed.';
+      if (this.synthSnapshot) {
+        this.synthSnapshot.status = message;
+      }
+      console.error('Sample Creator capture commit failed.', error);
+      this.render();
+    }
+  }
+
+  private handleSampleCreatorPianoNoteDown(midiNote: number): void {
+    if (!this.synthEngine || !this.synthSnapshot) {
+      return;
+    }
+
+    this.sampleCreatorPointerNote = midiNote;
+    if (this.synthSnapshot.inputArm === 'tracker') {
+      this.recordTrackerMidiNote(midiNote, this.sampleCreatorState.velocity);
+    } else {
+      void this.playSynthMidiNote(midiNote, this.sampleCreatorState.velocity);
+    }
+  }
+
+  private setSampleCreatorSynthParam(paramId: SynthParamId, value: number): void {
+    if (!this.synthEngine) {
+      return;
+    }
+
+    this.synthEngine.dispatch({
+      type: 'param/set',
+      id: paramId,
+      value: Number(value),
+    });
   }
 
   private getSampleCreatorOptions(snapshot: TrackerSnapshot): SampleCreatorRenderOptions | null {
@@ -1907,33 +2074,65 @@ export class TrackerApplication {
     }
 
     const synthSnapshot = this.synthSnapshot;
-    const targetSample = synthSnapshot
-      ? (snapshot.samples[synthSnapshot.targetSampleSlot] ?? snapshot.samples[snapshot.selectedSample])
-      : null;
     const pianoRange = this.getSampleCreatorPianoRange();
 
-    return {
+    return buildSampleCreatorViewModel({
       snapshot: synthSnapshot,
       telemetry: this.synthTelemetry,
-      targetSample,
       sampleSlots: snapshot.samples,
       keyboardOctave: this.keyboardOctave,
-      renderJob: { ...this.sampleCreatorState },
-      pianoStartAbsolute: pianoRange.startAbsolute,
-      pianoEndAbsolute: pianoRange.endAbsolute,
-      pianoRangeLabel: pianoRange.label,
-      pianoCanShiftDown: this.sampleCreatorPianoRangeIndex > 0,
-      pianoCanShiftUp: this.sampleCreatorPianoRangeIndex < SAMPLE_CREATOR_PIANO_RANGES.length - 1,
-      pianoFlashNote: this.sampleCreatorPianoFlashNote,
-      pianoFlashToken: this.sampleCreatorPianoFlashToken,
+      piano: {
+        startAbsolute: pianoRange.startAbsolute,
+        endAbsolute: pianoRange.endAbsolute,
+        rangeLabel: pianoRange.label,
+        canShiftDown: this.sampleCreatorPianoRangeIndex > 0,
+        canShiftUp: this.sampleCreatorPianoRangeIndex < SAMPLE_CREATOR_PIANO_RANGES.length - 1,
+        activeNotes: synthSnapshot?.activeNotes ?? [],
+        flashNote: this.sampleCreatorPianoFlashNote,
+        flashToken: this.sampleCreatorPianoFlashToken,
+      },
+      targetSlot: this.sampleCreatorState.targetSlot,
+      bakeSampleRate: this.sampleCreatorState.sampleRate,
+      renderState: {
+        midiNote: this.sampleCreatorState.midiNote,
+        velocity: this.sampleCreatorState.velocity,
+        durationSeconds: this.sampleCreatorState.durationSeconds,
+        tailSeconds: this.sampleCreatorState.tailSeconds,
+        normalize: this.sampleCreatorState.normalize,
+        fadeOut: this.sampleCreatorState.fadeOut,
+        volume: this.sampleCreatorState.volume,
+        fineTune: this.sampleCreatorState.fineTune,
+      },
       bakeLearnEnabled: this.sampleCreatorBakeLearnEnabled,
       capturedSample: this.sampleCreatorCapturedSample,
-      playIconHtml: iconMarkup(Play),
-      stopIconHtml: iconMarkup(Square),
-      recordIconHtml: iconMarkup(Circle),
-      bakeIconHtml: iconMarkup(FileUp),
-      deleteIconHtml: iconMarkup(Trash2),
-    };
+      icons: {
+        play: iconMarkup(Play),
+        stop: iconMarkup(Square),
+        record: iconMarkup(Circle),
+        bake: iconMarkup(FileUp),
+        delete: iconMarkup(Trash2),
+      },
+      callbacks: {
+        onClose: () => this.closeSampleCreatorWorkspace(),
+        onTargetSlotChange: (slot) => this.setSampleCreatorTargetSlot(slot),
+        onBakeRateChange: (sampleRate) => this.setSampleCreatorBakeRate(sampleRate),
+        onSynthSelect: (synth) => this.selectSampleCreatorSynth(synth),
+        onPresetSelect: (presetId) => this.selectSampleCreatorPreset(presetId),
+        onBakeControlChange: (id, value) => this.updateSampleCreatorBakeControl(id, value),
+        onBakeNormalizeChange: (enabled) => this.setSampleCreatorNormalize(enabled),
+        onBakeFadeOutChange: (enabled) => this.setSampleCreatorFadeOut(enabled),
+        onBakePreview: () => { void this.previewRenderedSynthNote(); },
+        onBakeLearnToggle: () => this.toggleSampleCreatorBakeLearn(),
+        onBakeCommit: () => { void this.runSampleCreatorBake(); },
+        onCaptureToggle: () => this.toggleSampleCreatorCapture(),
+        onCapturePlay: () => { void this.playSampleCreatorCapturedPreview(); },
+        onCaptureCommit: () => this.commitSampleCreatorCapture(),
+        onCaptureDiscard: () => this.discardSampleCreatorCapture(),
+        onPianoRangeShift: (direction) => this.shiftSampleCreatorPianoRange(direction),
+        onPianoNoteDown: (midiNote) => this.handleSampleCreatorPianoNoteDown(midiNote),
+        onSynthParamChange: (paramId, value) => this.setSampleCreatorSynthParam(paramId, value),
+      },
+    });
   }
 
   private getSampleEditorPanelOptions(snapshot: TrackerSnapshot): SampleEditorPanelRenderOptions {
@@ -2031,10 +2230,7 @@ export class TrackerApplication {
         }
         return;
       case 'sample-creator-close':
-        this.workspaceMode = 'tracker';
-        this.stopSynthPreview();
-        this.syncPlaybackCoordinator();
-        this.render();
+        this.closeSampleCreatorWorkspace();
         return;
     }
 
@@ -2045,7 +2241,7 @@ export class TrackerApplication {
     }
 
     if (this.synthEngine && this.synthSnapshot) {
-    switch (action) {
+      switch (action) {
         case 'sample-creator-arm-synth':
         case 'settings-arm-synth':
           this.synthEngine.dispatch({ type: 'input-arm/set', target: 'synth' });
@@ -2056,32 +2252,6 @@ export class TrackerApplication {
         case 'settings-arm-tracker':
           this.synthEngine.dispatch({ type: 'input-arm/set', target: 'tracker' });
           this.openMenu = null;
-          this.render();
-          return;
-        case 'sample-creator-select-synth': {
-          const synth = (target.dataset.synth === 'acid303' ? 'acid303' : 'core-sub') as SynthId;
-          this.synthEngine.dispatch({ type: 'synth/select', synth });
-          this.sampleCreatorState.sampleName = synth.slice(0, 22);
-          return;
-        }
-        case 'sample-creator-piano-range-down':
-          this.shiftSampleCreatorPianoRange(-1);
-          this.render();
-          return;
-        case 'sample-creator-piano-range-up':
-          this.shiftSampleCreatorPianoRange(1);
-          this.render();
-          return;
-        case 'sample-creator-toggle-bake-learn':
-          this.sampleCreatorBakeLearnEnabled = !this.sampleCreatorBakeLearnEnabled;
-          if (!this.sampleCreatorBakeLearnEnabled) {
-            this.sampleCreatorBakeLearnState = null;
-          }
-          if (this.synthSnapshot) {
-            this.synthSnapshot.status = this.sampleCreatorBakeLearnEnabled
-              ? 'Bake learn armed. Play a note to update render note, velocity, and hold time.'
-              : 'Bake learn stopped.';
-          }
           this.render();
           return;
         case 'sample-creator-preview-note':
@@ -2095,38 +2265,17 @@ export class TrackerApplication {
         case 'sample-creator-stop-live':
           this.stopSynthPreview();
           return;
-        case 'sample-creator-record':
         case 'sample-creator-capture':
-          this.synthEngine.dispatch({ type: this.synthSnapshot.recordState === 'recording' ? 'record/stop' : 'record/start' });
+          this.toggleSampleCreatorCapture();
           return;
-        case 'sample-creator-discard-recording':
         case 'sample-creator-discard-capture':
-          this.synthEngine.dispatch({ type: 'record/discard' });
+          this.discardSampleCreatorCapture();
           return;
-        case 'sample-creator-commit-recording':
         case 'sample-creator-commit-capture':
-          try {
-            this.commitRecordedSampleCreatorSample();
-          } catch (error) {
-            const message = error instanceof Error ? error.message : 'Capture import failed.';
-            if (this.synthSnapshot) {
-              this.synthSnapshot.status = message;
-            }
-            console.error('Sample Creator capture commit failed.', error);
-            this.render();
-          }
+          this.commitSampleCreatorCapture();
           return;
         case 'sample-creator-bake':
-          try {
-            await this.bakeSampleCreatorSample();
-          } catch (error) {
-            const message = error instanceof Error ? error.message : 'Bake failed.';
-            if (this.synthSnapshot) {
-              this.synthSnapshot.status = message;
-            }
-            console.error('Sample Creator bake failed.', error);
-            this.render();
-          }
+          await this.runSampleCreatorBake();
           return;
       }
     }
@@ -2256,109 +2405,6 @@ export class TrackerApplication {
       return;
     }
 
-    if (this.synthEngine && event.target.dataset.input?.startsWith('sample-creator')) {
-      const inputKey = event.target.dataset.input;
-      switch (inputKey) {
-        case 'sample-creator-param':
-          if (!(event.target instanceof HTMLInputElement) || !event.target.dataset.param) {
-            return;
-          }
-          this.synthEngine.dispatch({
-            type: 'param/set',
-            id: event.target.dataset.param as SynthParamId,
-            value: Number(event.target.value),
-          });
-          return;
-        case 'sample-creator-preset':
-          if (!(event.target instanceof HTMLSelectElement)) {
-            return;
-          }
-          this.synthEngine.dispatch({ type: 'preset/load', presetId: event.target.value });
-          this.sampleCreatorState.sampleName = event.target.value.split(':')[1]?.slice(0, 22) ?? this.sampleCreatorState.sampleName;
-          return;
-        case 'sample-creator-name':
-          if (event.target instanceof HTMLInputElement) {
-            this.sampleCreatorState.sampleName = event.target.value.slice(0, 22);
-          }
-          this.refreshSampleCreatorCapturedSample();
-          this.render();
-          return;
-        case 'sample-creator-target-slot':
-          if (event.target instanceof HTMLSelectElement) {
-            const slot = clamp(Number(event.target.value), 0, 30);
-            this.sampleCreatorState.targetSlot = slot;
-            this.synthEngine.dispatch({ type: 'target-slot/set', slot });
-          }
-          this.render();
-          return;
-        case 'sample-creator-duration':
-          if (event.target instanceof HTMLInputElement) {
-            this.sampleCreatorState.durationSeconds = clamp(Number(event.target.value), 0.05, 6);
-          }
-          this.refreshSampleCreatorCapturedSample();
-          this.render();
-          return;
-        case 'sample-creator-velocity':
-          if (event.target instanceof HTMLInputElement) {
-            this.sampleCreatorState.velocity = clamp(Number(event.target.value), 0.05, 1);
-          }
-          this.refreshSampleCreatorCapturedSample();
-          this.render();
-          return;
-        case 'sample-creator-tail':
-          if (event.target instanceof HTMLInputElement) {
-            this.sampleCreatorState.tailSeconds = clamp(Number(event.target.value), 0, 4);
-          }
-          this.refreshSampleCreatorCapturedSample();
-          this.render();
-          return;
-        case 'sample-creator-note':
-          if (event.target instanceof HTMLInputElement) {
-            this.sampleCreatorState.midiNote = clamp(Number(event.target.value), 24, 96);
-          }
-          this.refreshSampleCreatorCapturedSample();
-          this.render();
-          return;
-        case 'sample-creator-volume':
-          if (event.target instanceof HTMLInputElement) {
-            this.sampleCreatorState.volume = clamp(Number(event.target.value), 0, 64);
-          }
-          this.refreshSampleCreatorCapturedSample();
-          this.render();
-          return;
-        case 'sample-creator-finetune':
-          if (event.target instanceof HTMLInputElement) {
-            this.sampleCreatorState.fineTune = clamp(Number(event.target.value), -8, 7);
-          }
-          this.refreshSampleCreatorCapturedSample();
-          this.render();
-          return;
-        case 'sample-creator-normalize':
-          if (event.target instanceof HTMLInputElement) {
-            this.sampleCreatorState.normalize = event.target.checked;
-          }
-          this.refreshSampleCreatorCapturedSample();
-          this.render();
-          return;
-        case 'sample-creator-fadeout':
-          if (event.target instanceof HTMLInputElement) {
-            this.sampleCreatorState.fadeOut = event.target.checked;
-          }
-          this.refreshSampleCreatorCapturedSample();
-          this.render();
-          return;
-        case 'sample-creator-samplerate':
-          if (event.target instanceof HTMLSelectElement) {
-            const sampleRate = clamp(Number(event.target.value), 11025, 48000);
-            this.sampleCreatorState.sampleRate = sampleRate;
-            this.synthEngine.dispatch({ type: 'bake-rate/set', sampleRate });
-          }
-          this.refreshSampleCreatorCapturedSample();
-          this.render();
-          return;
-      }
-    }
-
     if (!this.engine || !this.snapshot) {
       return;
     }
@@ -2420,27 +2466,6 @@ export class TrackerApplication {
 
   private handleWindowPointerDown(event: MouseEvent): void {
     const target = event.target instanceof Element ? event.target : null;
-    const sampleCreatorPianoCanvas = target?.closest('[data-role="sample-creator-piano-canvas"]') as HTMLCanvasElement | null;
-    if (featureFlags.sample_composer && sampleCreatorPianoCanvas && this.workspaceMode === 'sample-creator' && this.synthEngine && this.synthSnapshot) {
-      const pianoRange = this.getSampleCreatorPianoRange();
-      const key = resolvePianoKeyFromCanvasPointer(
-        event,
-        sampleCreatorPianoCanvas,
-        pianoRange.startAbsolute,
-        pianoRange.endAbsolute,
-      );
-      if (key) {
-        event.preventDefault();
-        this.sampleCreatorPointerNote = key.absolute;
-        if (this.synthSnapshot.inputArm === 'tracker') {
-          this.recordTrackerMidiNote(key.absolute, this.sampleCreatorState.velocity);
-        } else {
-          void this.playSynthMidiNote(key.absolute, this.sampleCreatorState.velocity);
-        }
-      }
-      return;
-    }
-
     if (!this.openMenu && !this.aboutOpen && !this.openSampleEditorPopover && !this.sampleEditorNumberEdit) {
       return;
     }
@@ -2959,9 +2984,8 @@ export class TrackerApplication {
       return;
     }
 
-    const ratio = sampleLength <= 0 ? 1 : clamp(viewLength / sampleLength, 0, 1);
-    const thumbWidth = Math.max(24, Math.round(trackWidth * ratio));
-    scrollbar.style.setProperty('--sample-editor-thumb-width', `${Math.min(trackWidth, thumbWidth)}px`);
+    const thumbWidth = getWaveformScrollbarThumbWidth(trackWidth, sampleLength, viewLength);
+    scrollbar.style.setProperty('--sample-editor-thumb-width', `${thumbWidth}px`);
   }
 
   private handleModernHexEntry(event: KeyboardEvent): boolean {

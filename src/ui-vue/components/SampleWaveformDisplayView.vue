@@ -27,6 +27,12 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import type { RenderedSample } from '../../core/synthTypes';
 import { clamp } from '../../ui/appShared';
+import {
+  clampWaveformViewport,
+  getWaveformScrollMax,
+  getWaveformScrollbarThumbWidth,
+  zoomWaveformViewport,
+} from '../composables/waveformViewport';
 import { drawStandaloneSampleEditor, type SampleEditorView } from '../../ui-modern/components/sampleWaveformRenderer';
 import { drawRoundedRectPath } from '../../visualization-engine/canvasUtils';
 
@@ -49,7 +55,7 @@ const scrollMax = computed(() => {
     return 0;
   }
 
-  return Math.max(0, props.sample.data.length - Math.max(1, viewLength.value));
+  return getWaveformScrollMax(props.sample.data.length, viewLength.value);
 });
 
 const currentView = computed<SampleEditorView>(() => ({
@@ -79,9 +85,8 @@ const updateScrollbarThumbWidth = (): void => {
     return;
   }
 
-  const ratio = props.sample.data.length <= 0 ? 1 : clamp(viewLength.value / props.sample.data.length, 0, 1);
-  const thumbWidth = Math.max(24, Math.round(trackWidth * ratio));
-  scrollbar.value.style.setProperty('--sample-editor-thumb-width', `${Math.min(trackWidth, thumbWidth)}px`);
+  const thumbWidth = getWaveformScrollbarThumbWidth(trackWidth, props.sample.data.length, viewLength.value);
+  scrollbar.value.style.setProperty('--sample-editor-thumb-width', `${thumbWidth}px`);
 };
 
 const resetView = (): void => {
@@ -96,11 +101,9 @@ const setView = (nextStart: number, nextLength: number): void => {
     return;
   }
 
-  const sampleLength = props.sample.data.length;
-  const clampedLength = clamp(Math.round(nextLength), Math.min(64, sampleLength), Math.max(64, sampleLength));
-  const maxStart = Math.max(0, sampleLength - clampedLength);
-  viewLength.value = clampedLength;
-  viewStart.value = clamp(Math.round(nextStart), 0, maxStart);
+  const nextView = clampWaveformViewport(props.sample.data.length, nextStart, nextLength);
+  viewStart.value = nextView.start;
+  viewLength.value = nextView.length;
 };
 
 const zoomAround = (anchorOffset: number, zoomIn: boolean): void => {
@@ -108,13 +111,13 @@ const zoomAround = (anchorOffset: number, zoomIn: boolean): void => {
     return;
   }
 
-  const currentLength = Math.max(64, viewLength.value || props.sample.data.length);
-  const nextLength = zoomIn
-    ? Math.max(64, Math.round(currentLength * 0.5))
-    : Math.min(props.sample.data.length, Math.round(currentLength * 2));
-  const normalizedAnchor = currentLength <= 0 ? 0.5 : (anchorOffset - viewStart.value) / currentLength;
-  const nextStart = anchorOffset - (nextLength * normalizedAnchor);
-  setView(nextStart, nextLength);
+  const nextView = zoomWaveformViewport(
+    props.sample.data.length,
+    { start: viewStart.value, length: Math.max(64, viewLength.value || props.sample.data.length) },
+    anchorOffset,
+    zoomIn,
+  );
+  setView(nextView.start, nextView.length);
 };
 
 const redraw = (): void => {

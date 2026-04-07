@@ -6,14 +6,14 @@
         <button
           type="button"
           class="icon-button"
-          data-action="sample-creator-piano-range-down"
           :disabled="!canShiftDown"
+          @click="emit('shift-range', -1)"
         >Lower</button>
         <button
           type="button"
           class="icon-button"
-          data-action="sample-creator-piano-range-up"
           :disabled="!canShiftUp"
+          @click="emit('shift-range', 1)"
         >Higher</button>
       </div>
     </div>
@@ -21,8 +21,8 @@
       <canvas
         ref="canvasRef"
         class="sample-creator-piano-canvas"
-        data-role="sample-creator-piano-canvas"
         aria-label="Sample Creator piano keyboard"
+        @mousedown="handleMouseDown"
       />
     </div>
   </div>
@@ -34,6 +34,7 @@ import {
   createPianoGlowLevels,
   decayPianoGlowLevels,
   drawPianoCanvas,
+  resolvePianoKeyFromCanvasPointer,
   triggerPianoGlow,
 } from '../../ui/pianoCanvasShared';
 
@@ -49,6 +50,11 @@ const props = defineProps<{
   activeNotes: ReadonlySet<number>;
   flashNote: number | null;
   flashToken: number;
+}>();
+
+const emit = defineEmits<{
+  'note-down': [midiNote: number];
+  'shift-range': [direction: -1 | 1];
 }>();
 
 const canvasRef = ref<HTMLCanvasElement | null>(null);
@@ -96,6 +102,25 @@ const resetGlowLevels = (): void => {
   pianoGlowLevels = createPianoGlowLevels(1, props.startAbsolute, props.endAbsolute);
   previousActiveNotes = new Set(props.activeNotes);
   pianoLastFrameAt = null;
+};
+
+const handleMouseDown = (event: MouseEvent): void => {
+  if (!canvasRef.value) {
+    return;
+  }
+
+  const key = resolvePianoKeyFromCanvasPointer(
+    event,
+    canvasRef.value,
+    props.startAbsolute,
+    props.endAbsolute,
+  );
+  if (!key) {
+    return;
+  }
+
+  event.preventDefault();
+  emit('note-down', key.absolute);
 };
 
 const tick = (timestamp: number): void => {

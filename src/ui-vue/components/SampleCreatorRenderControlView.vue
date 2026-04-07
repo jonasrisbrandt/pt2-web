@@ -6,14 +6,14 @@
         v-if="editing"
         ref="inlineInput"
         class="sample-creator-render-control__number tool-popover__inline-input"
-        :data-input="props.inputKey"
         type="number"
         :min="props.min"
         :max="props.max"
         :step="props.step"
-        :value="props.value"
-        @blur="stopEditing"
-        @keydown.enter="stopEditing"
+        :value="draftValue"
+        @input="handleInlineInput"
+        @blur="commitEditing"
+        @keydown.enter="commitEditing"
         @keydown.escape.prevent="cancelEditing"
       />
       <button
@@ -25,12 +25,12 @@
     </div>
     <input
       class="sample-creator-render-control__range tool-popover__slider"
-      :data-input="props.inputKey"
       type="range"
       :min="props.min"
       :max="props.max"
       :step="props.step"
-      :value="props.value"
+      :value="props.modelValue"
+      @input="handleSliderInput"
     />
     <span
       v-if="props.helperText"
@@ -44,8 +44,7 @@ import { nextTick, ref, watch } from 'vue';
 
 const props = defineProps<{
   label: string;
-  inputKey: string;
-  value: number;
+  modelValue: number;
   min: number;
   max: number;
   step: number;
@@ -53,20 +52,63 @@ const props = defineProps<{
   helperText?: string;
 }>();
 
+const emit = defineEmits<{
+  'update:modelValue': [value: number];
+}>();
+
 const editing = ref(false);
 const inlineInput = ref<HTMLInputElement | null>(null);
+const draftValue = ref(String(props.modelValue));
 
 const startEditing = (): void => {
+  draftValue.value = String(props.modelValue);
   editing.value = true;
 };
 
-const stopEditing = (): void => {
+const commitEditing = (): void => {
+  const numeric = Number(draftValue.value);
+  if (!Number.isNaN(numeric)) {
+    emit('update:modelValue', numeric);
+  }
   editing.value = false;
 };
 
 const cancelEditing = (): void => {
+  draftValue.value = String(props.modelValue);
   editing.value = false;
 };
+
+const handleInlineInput = (event: Event): void => {
+  const target = event.target as HTMLInputElement | null;
+  if (!target) {
+    return;
+  }
+
+  draftValue.value = target.value;
+  const numeric = Number(target.value);
+  if (!Number.isNaN(numeric)) {
+    emit('update:modelValue', numeric);
+  }
+};
+
+const handleSliderInput = (event: Event): void => {
+  const target = event.target as HTMLInputElement | null;
+  if (!target) {
+    return;
+  }
+
+  const numeric = Number(target.value);
+  if (Number.isNaN(numeric)) {
+    return;
+  }
+
+  draftValue.value = target.value;
+  emit('update:modelValue', numeric);
+};
+
+watch(() => props.modelValue, (value) => {
+  draftValue.value = String(value);
+});
 
 watch(editing, async (value) => {
   if (!value) {
